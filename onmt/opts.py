@@ -152,10 +152,12 @@ def preprocess_opts(parser):
     # Dictionary options, for text corpus
 
     group = parser.add_argument_group('Vocab')
-    group.add_argument('-src_vocab',
-                       help="Path to an existing source vocabulary")
-    group.add_argument('-tgt_vocab',
-                       help="Path to an existing target vocabulary")
+    group.add_argument('-src_vocab', default="",
+                       help="""Path to an existing source vocabulary. Format:
+                       one word per line.""")
+    group.add_argument('-tgt_vocab', default="",
+                       help="""Path to an existing target vocabulary. Format:
+                       one word per line.""")
     group.add_argument('-features_vocabs_prefix', type=str, default='',
                        help="Path prefix to existing features vocabularies")
     group.add_argument('-src_vocab_size', type=int, default=50000,
@@ -430,6 +432,12 @@ def translate_opts(parser):
                         (higher = longer generation)""")
     group.add_argument('-beta', type=float, default=-0.,
                        help="""Coverage penalty parameter""")
+    group.add_argument('-block_ngram_repeat', type=int, default=0,
+                       help='Block repetition of ngrams during decoding.')
+    group.add_argument('-ignore_when_blocking', nargs='+', type=str,
+                       default=[],
+                       help="""Ignore these strings when blocking repeats.
+                       You want to block sentence delimiters.""")
     group.add_argument('-replace_unk', action="store_true",
                        help="""Replace the generated UNK tokens with the
                        source token that had highest attention weight. If

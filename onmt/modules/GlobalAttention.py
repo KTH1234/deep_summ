@@ -86,7 +86,7 @@ class GlobalAttention(nn.Module):
         # concat 3 vector : decoder output, temporal attention, decoder attention
         self.linear_out = nn.Linear(dim*3, dim, bias=out_bias)
 
-        self.sm = nn.Softmax()
+        self.sm = nn.Softmax(dim=-1)
         self.tanh = nn.Tanh()
 
         if coverage:
