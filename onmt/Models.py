@@ -341,6 +341,13 @@ class RNNDecoderBase(nn.Module):
         else:  # GRU
             return RNNDecoderState(self.hidden_size,
                                    _fix_enc_hidden(encoder_final))
+        
+    # initiating attn history information (for intra-temporal, intra decoder attn)
+    def init_attn_history():
+        # for intra-temporal attention, init attn history per every batches
+        self.attn.init_attn_outputs()
+        # for intra-decoder attention, init decoder history per every batches
+        self.attn.init_decoder_outputs()
 
 
 class StdRNNDecoder(RNNDecoderBase):
@@ -478,6 +485,15 @@ class InputFeedRNNDecoder(RNNDecoderBase):
         if self._coverage:
             attns["coverage"] = []
 
+        # for intra-temporal attention, init attn history per every batches
+#         self.attn.init_attn_outputs()
+        # for intra-decoder attention, init decoder history per every batches
+#         self.attn.init_decoder_outputs()
+        
+        print("model line:486, tgt")
+        print(tgt)
+        input()
+
         emb = self.embeddings(tgt)
         assert emb.dim() == 3  # len x batch x embedding_dim
 
@@ -495,7 +511,8 @@ class InputFeedRNNDecoder(RNNDecoderBase):
             decoder_output, p_attn = self.attn(
                 rnn_output,
                 memory_bank.transpose(0, 1),
-                memory_lengths=memory_lengths)
+                memory_lengths=memory_lengths,
+                emb_weight=self.embeddings.word_lut.weight) # for sharing decoder weight
             if self.context_gate is not None:
                 # TODO: context gate should be employed
                 # instead of second RNN transform.
@@ -585,6 +602,9 @@ class NMTModel(nn.Module):
         enc_final, memory_bank = self.encoder(src, lengths)
         enc_state = \
             self.decoder.init_decoder_state(src, memory_bank, enc_final)
+            
+        self.decoder.init_attn_history() # init attn history in decoder for new attention
+        
         decoder_outputs, dec_state, attns = \
             self.decoder(tgt, memory_bank,
                          enc_state if dec_state is None

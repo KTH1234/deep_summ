@@ -48,6 +48,11 @@ class TextDataset(ONMTDatasetBase):
         self.n_src_feats = num_src_feats
         self.n_tgt_feats = num_tgt_feats
 
+        ##
+#         for src, tgt in zip(src_examples_iter, tgt_examples_iter):
+#             print("TextDataset, line:50", self._join_dicts(src, tgt))
+        
+        
         # Each element of an example is a dictionary whose keys represents
         # at minimum the src tokens and their indices and potentially also
         # the src and tgt features and alignment information.
@@ -56,6 +61,8 @@ class TextDataset(ONMTDatasetBase):
                              zip(src_examples_iter, tgt_examples_iter))
         else:
             examples_iter = src_examples_iter
+            
+            
 
         if dynamic_dict:
             examples_iter = self._dynamic_dict(examples_iter)
@@ -75,6 +82,10 @@ class TextDataset(ONMTDatasetBase):
 
         out_examples = []
         for ex_values in example_values:
+            print("TextDataset, line:85", len(ex_values))
+            print("TextDataset, line:86", ex_values)
+            print("TextDataset, line:87", out_fields)
+            input()
             example = self._construct_example_fromlist(
                 ex_values, out_fields)
             src_size += len(example.src)
@@ -235,11 +246,13 @@ class TextDataset(ONMTDatasetBase):
             alignment = torch.zeros(tgt_size, len(data)).long()
             for i, sent in enumerate(data):
                 alignment[:sent.size(0), i] = sent
+             
             return alignment
 
         fields["alignment"] = torchtext.data.Field(
             use_vocab=False, tensor_type=torch.LongTensor,
             postprocessing=make_tgt, sequential=False)
+     
 
         fields["indices"] = torchtext.data.Field(
             use_vocab=False, tensor_type=torch.LongTensor,
@@ -284,6 +297,9 @@ class TextDataset(ONMTDatasetBase):
                 mask = torch.LongTensor(
                     [0] + [src_vocab.stoi[w] for w in tgt] + [0])
                 example["alignment"] = mask
+                        
+                print("Textdataset line:301", example["alignment"])
+                input()  
             yield example
 
 

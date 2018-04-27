@@ -161,7 +161,11 @@ class CopyGeneratorLossCompute(onmt.Loss.LossComputeBase):
         if getattr(batch, "alignment", None) is None:
             raise AssertionError("using -copy_attn you need to pass in "
                                  "-dynamic_dict during preprocess stage.")
-
+        print("CopyGenerator line 163",batch.src)
+        print("CopyGenerator line 164",batch.tgt[range_[0] + 1: range_[1]])
+        print("CopyGenerator line 165",batch.alignment[range_[0] + 1: range_[1]])
+        print("CopyGenerator line 166",type(batch))
+        
         return {
             "output": output,
             "target": batch.tgt[range_[0] + 1: range_[1]],
@@ -181,9 +185,12 @@ class CopyGeneratorLossCompute(onmt.Loss.LossComputeBase):
         """
         target = target.view(-1)
         align = align.view(-1)
+        print("CopyGenerator line:187", output)
         scores = self.generator(self._bottle(output),
                                 self._bottle(copy_attn),
                                 batch.src_map)
+        print("CopyGenerator line:191", scores)
+        input()
         loss = self.criterion(scores, align, target)
         scores_data = scores.data.clone()
         scores_data = onmt.io.TextDataset.collapse_copy_scores(
@@ -216,3 +223,5 @@ class CopyGeneratorLossCompute(onmt.Loss.LossComputeBase):
             loss = loss.sum()
 
         return loss, stats
+
+    

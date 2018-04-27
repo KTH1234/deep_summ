@@ -144,6 +144,9 @@ class Trainer(object):
         Returns:
             stats (:obj:`onmt.Statistics`): epoch loss statistics
         """
+        print("Trainer line:147 train_iter dataset")
+        print(train_iter.datasets)
+        
         total_stats = Statistics()
         report_stats = Statistics()
         idx = 0
@@ -160,7 +163,22 @@ class Trainer(object):
             num_batches = -1
 
         for i, batch in enumerate(train_iter):
+            # batch는 example과 유사하다고 생각하면 될 듯
             cur_dataset = train_iter.get_cur_dataset()
+            print("Trainer line:167 batch dataset fields src")
+            print(len(batch.dataset.fields['src'].vocab.freqs))
+            print("Trainer line:167 batch alignment")
+            print(batch.dataset) # textdataset
+            print(len(batch.dataset.examples)) # torchtext.examples
+            print(vars(batch.dataset.examples[0]))
+            print(len(batch.dataset.src_vocabs))
+            print(batch.dataset.src_vocabs[0].freqs) # 이게 dynamic dict에서 생성된 vocab
+            print(type(batch))
+            
+            print(list(batch.fields)) # 이게 key형태로 저장되었음
+            print(batch.indices)
+            print(batch.alignment)            
+            print()
             self.train_loss.cur_dataset = cur_dataset
 
             true_batchs.append(batch)
@@ -294,10 +312,20 @@ class Trainer(object):
                 src_lengths = None
 
             tgt_outer = onmt.io.make_features(batch, 'tgt')
+            
+#             print("Trainer line 298: batch")
+#             print(batch)
+            
+            # index만 출력함     
+#             print("Trainer line 299: src")
+#             print(src)
+#             print("Trainer line 302: tgt")
+#             print(tgt_outer)                         
 
             for j in range(0, target_size-1, trunc_size):
                 # 1. Create truncated target.
                 tgt = tgt_outer[j: j + trunc_size]
+                
 
                 # 2. F-prop all but generator.
                 if self.grad_accum_count == 1:

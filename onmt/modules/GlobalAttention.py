@@ -63,18 +63,28 @@ class GlobalAttention(nn.Module):
 
         self.dim = dim
         self.attn_type = attn_type
+        
+        # for intra-temporal attention save attn output history                
+        self.attn_outputs = []
+        # for intra-decoder attention save decoder output history        
+        self.decoder_outputs = []
+        
         assert (self.attn_type in ["dot", "general", "mlp"]), (
                 "Please select a valid attention type.")
 
         if self.attn_type == "general":
             self.linear_in = nn.Linear(dim, dim, bias=False)
+            # weight matrix for intra-decoder attention
+            self.linear_in_intra_decoder = nn.Linear(dim, dim, bias=False)
         elif self.attn_type == "mlp":
             self.linear_context = nn.Linear(dim, dim, bias=False)
             self.linear_query = nn.Linear(dim, dim, bias=True)
             self.v = nn.Linear(dim, 1, bias=False)
         # mlp wants it with bias
         out_bias = self.attn_type == "mlp"
-        self.linear_out = nn.Linear(dim*2, dim, bias=out_bias)
+        
+        # concat 3 vector : decoder output, temporal attention, decoder attention
+        self.linear_out = nn.Linear(dim*3, dim, bias=out_bias)
 
         self.sm = nn.Softmax()
         self.tanh = nn.Tanh()
@@ -82,7 +92,15 @@ class GlobalAttention(nn.Module):
         if coverage:
             self.linear_cover = nn.Linear(1, dim, bias=False)
 
-    def score(self, h_t, h_s):
+        # for intra-temporal attention, init attn history per every batches
+    def init_attn_outputs(self):
+        self.attn_outputs = []
+            
+    # for intra-decoder attention, init decoder output history
+    def init_decoder_outputs(self):
+        self.decoder_outputs = []
+
+    def score(self, h_t, h_s, typ="enc_attn"):
         """
         Args:
           h_t (`FloatTensor`): sequence of queries `[batch x tgt_len x dim]`
@@ -105,7 +123,13 @@ class GlobalAttention(nn.Module):
         if self.attn_type in ["general", "dot"]:
             if self.attn_type == "general":
                 h_t_ = h_t.view(tgt_batch*tgt_len, tgt_dim)
-                h_t_ = self.linear_in(h_t_)
+                
+                # use seperate weight matrix for intra decoder and temporal attention
+                if typ == "enc_attn":
+                    h_t_ = self.linear_in(h_t_)
+                else:
+                    h_t_ = self.linear_in_intra_decoder(h_t_)
+                   
                 h_t = h_t_.view(tgt_batch, tgt_len, tgt_dim)
             h_s_ = h_s.transpose(1, 2)
             # (batch, t_len, d) x (batch, d, s_len) --> (batch, t_len, s_len)
@@ -125,7 +149,7 @@ class GlobalAttention(nn.Module):
 
             return self.v(wquh.view(-1, dim)).view(tgt_batch, tgt_len, src_len)
 
-    def forward(self, input, memory_bank, memory_lengths=None, coverage=None):
+    def forward(self, input, memory_bank, memory_lengths=None, coverage=None, emb_weight=None):
         """
 
         Args:
@@ -166,22 +190,87 @@ class GlobalAttention(nn.Module):
 
         # compute attention scores, as in Luong et al.
         align = self.score(input, memory_bank)
-
+        
         if memory_lengths is not None:
             mask = sequence_mask(memory_lengths)
             mask = mask.unsqueeze(1)  # Make it broadcastable.
             align.data.masked_fill_(1 - mask, -float('inf'))
+                                                                                                                                                                                                                                                                                                                 
+        ## Intra-temporal attention
+        ## assum train is going on the gpu    
+        
+        align = torch.exp(align) # batch * 1(target_length) * input_length
+#         print("globalattn line 203: align")
+                
+        if len(self.attn_outputs) < 1: # t=1
+            align_vectors = self.sm(align.view(batch*targetL, sourceL))
+            align_vectors = align_vectors.view(batch, targetL, sourceL)
+        else: # t > 1
+            print("global attn line:209, attn_outputs")
+            print(len(self.attn_outputs))
+            temporal_attns = torch.cat(self.attn_outputs, 1) # batch * len(t-1) * input_length
+            normalizing_factor = torch.sum(temporal_attns,1).unsqueeze(1)
+#             print("global attn line:214, normalizing factor")
+
+            # wrong implementation 
+            # normalizing_factor = torch.autograd.Variable(torch.cat([torch.ones(align.size()[0], 1, 1).cuda(), torch.cumsum(torch.exp(align), 2).data[:,:,:-1]],2))
+#             align = torch.exp(align) / normalizing_factor
+#             align_vectors = align / torch.sum(align, 2).unsqueeze(2)            
+            
+            align_vectors = align / normalizing_factor            
+            align_vectors = self.sm(align.view(batch*targetL, sourceL))
+            align_vectors = align_vectors.view(batch, targetL, sourceL)
 
         # Softmax to normalize attention weights
-        align_vectors = self.sm(align.view(batch*targetL, sourceL))
-        align_vectors = align_vectors.view(batch, targetL, sourceL)
+        ## 기존 attention
+#         align_vectors = self.sm(align.view(batch*targetL, sourceL))
+#         align_vectors = align_vectors.view(batch, targetL, sourceL)
 
         # each context vector c_t is the weighted average
         # over all the source hidden states
-        c = torch.bmm(align_vectors, memory_bank)
+        c = torch.bmm(align_vectors, memory_bank) # for intra-temporal attention
+        self.attn_outputs.append(align)
+        
+        
+        # ======== intra-decoder attention
+        if len(self.decoder_outputs) < 1:
+# TO DO : change initial value to zero vector
+# ? what is size of zero vector? 밑에 decoder attn도 조금 이상해 보임
+            # set zero vector to first case
+            c_dec = input * 0 
+#             print("glbal-attn", "dd")
+        else:
+            decoder_history = torch.cat(self.decoder_outputs, 1) # batch * tgt_len(?) * dim
+            decoder_align = self.score(input, decoder_history, "dec_attn")
+#             print("global attn line:223 decoder align")
+#             print(decoder_align)
+#             input()
+
+#             print("global-attn line:225", decoder_history)
+#             if len(self.decoder_outputs) == 5:
+#                 input()
+            
+            history_len = len(self.decoder_outputs)
+            decoder_align_vectors = self.sm(decoder_align.view(batch*targetL, history_len))
+            decoder_align_vectors = decoder_align_vectors.view(batch, targetL, history_len)
+#             print("global-attn line:232", decoder_align_vectors) 
+            c_dec = torch.bmm(decoder_align_vectors, decoder_history)     
+    
+
+
+        self.decoder_outputs.append(input)
+   
+        # ========
+        ##
+        print("gb-attn line:239", self.linear_out.weight.data.size())
+#         if emb_weight is not None:
+#             print("gb-attn line:240", emb_weight.data.size())
+#             self.linear_out.weight = self.tanh(emb_weight * self.linear_out.weight)
+        # print("gb-attn line:240", (self.linear_out.weight.data*emb_weight.data).size())
+        # input()
 
         # concatenate
-        concat_c = torch.cat([c, input], 2).view(batch*targetL, dim*2)
+        concat_c = torch.cat([c, input, c_dec], 2).view(batch*targetL, dim*3)
         attn_h = self.linear_out(concat_c).view(batch, targetL, dim)
         if self.attn_type in ["general", "dot"]:
             attn_h = self.tanh(attn_h)
