@@ -86,7 +86,7 @@ class GlobalAttention(nn.Module):
         # concat 3 vector : decoder output, temporal attention, decoder attention
         self.linear_out = nn.Linear(dim*3, dim, bias=out_bias)
 
-        self.sm = nn.Softmax(dim=-1)
+        self.sm = nn.Softmax()
         self.tanh = nn.Tanh()
 
         if coverage:
@@ -94,11 +94,15 @@ class GlobalAttention(nn.Module):
 
         # for intra-temporal attention, init attn history per every batches
     def init_attn_outputs(self):
+        self.attn_outputs = None
         self.attn_outputs = []
+#         print("gb attn line:98, len attn_otputs", len(self.attn_outputs))
             
     # for intra-decoder attention, init decoder output history
     def init_decoder_outputs(self):
+        self.decoder_outputs = None
         self.decoder_outputs = []
+#         print("gb attn line:103, len decoder_outputs", len(self.decoder_outputs))
 
     def score(self, h_t, h_s, typ="enc_attn"):
         """
@@ -203,11 +207,13 @@ class GlobalAttention(nn.Module):
 #         print("globalattn line 203: align")
                 
         if len(self.attn_outputs) < 1: # t=1
+#             print("global attn line:208, attn_outputs")
+#             print(len(self.attn_outputs))
             align_vectors = self.sm(align.view(batch*targetL, sourceL))
             align_vectors = align_vectors.view(batch, targetL, sourceL)
         else: # t > 1
-            print("global attn line:209, attn_outputs")
-            print(len(self.attn_outputs))
+#             print("global attn line:209, attn_outputs")
+#             print(len(self.attn_outputs))
             temporal_attns = torch.cat(self.attn_outputs, 1) # batch * len(t-1) * input_length
             normalizing_factor = torch.sum(temporal_attns,1).unsqueeze(1)
 #             print("global attn line:214, normalizing factor")
@@ -230,6 +236,7 @@ class GlobalAttention(nn.Module):
         # over all the source hidden states
         c = torch.bmm(align_vectors, memory_bank) # for intra-temporal attention
         self.attn_outputs.append(align)
+#         print("gb attn line:237 len attn_outputs", len(self.attn_outputs))
         
         
         # ======== intra-decoder attention
@@ -262,7 +269,7 @@ class GlobalAttention(nn.Module):
    
         # ========
         ##
-        print("gb-attn line:239", self.linear_out.weight.data.size())
+#         print("gb-attn line:239", self.linear_out.weight.data.size())
 #         if emb_weight is not None:
 #             print("gb-attn line:240", emb_weight.data.size())
 #             self.linear_out.weight = self.tanh(emb_weight * self.linear_out.weight)

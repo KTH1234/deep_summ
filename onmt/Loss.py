@@ -81,13 +81,19 @@ class LossComputeBase(nn.Module):
         """
         range_ = (0, batch.tgt.size(0))
         shard_state = self._make_shard_state(batch, output, range_, attns)
+        
+#         if 'rewards' not in shard_state:
+#             print("loss line:86 rewards")
+#             _, batch_stats = self.validate_loss_compute(batch, **shard_state)        
+#         else:
+#             _, batch_stats = self._compute_loss(batch, **shard_state)        
         _, batch_stats = self._compute_loss(batch, **shard_state)
 
         return batch_stats
 
     def sharded_compute_loss(self, batch, output, attns,
                              cur_trunc, trunc_size, shard_size,
-                             normalization):
+                             normalization, backward=True):
         """Compute the forward loss and backpropagate.  Computation is done
         with shards and optionally truncation for memory efficiency.
 
@@ -120,15 +126,16 @@ class LossComputeBase(nn.Module):
         shard_state = self._make_shard_state(batch, output, range_, attns)
 
         for shard in shards(shard_state, shard_size):
-            print("Loss, line:123", shard)
-            input()
+#             print("Loss, line:123", shard)
+#             input()
             loss, stats = self._compute_loss(batch, **shard)
-            loss.div(normalization).backward()
+            if backward:
+                loss.div(normalization).backward()
             batch_stats.update(stats)
 
         return batch_stats
 
-    def _stats(self, loss, scores, target):
+    def _stats(self, loss, scores, target, reward=None):
         """
         Args:
             loss (:obj:`FloatTensor`): the loss computed by the loss criterion.
@@ -143,7 +150,7 @@ class LossComputeBase(nn.Module):
         num_correct = pred.eq(target) \
                           .masked_select(non_padding) \
                           .sum()
-        return onmt.Statistics(loss[0], non_padding.sum(), num_correct)
+        return onmt.Statistics(loss[0], non_padding.sum(), num_correct, reward=reward)
 
     def _bottle(self, v):
         return v.view(-1, v.size(2))
@@ -257,7 +264,7 @@ def shards(state, shard_size, eval=False):
         # over the shards, not over the keys: therefore, the values need
         # to be re-zipped by shard and then each shard can be paired
         # with the keys.
-        print("line:260 Loss", values)
+#         print("line:260 Loss", values)
         
         for shard_tensors in zip(*values):
             yield dict(zip(keys, shard_tensors))

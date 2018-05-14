@@ -23,6 +23,7 @@ if __name__ == "__main__":
         description='translate.py',
         formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     onmt.opts.add_md_help_argument(parser)
+
     onmt.opts.translate_opts(parser)
 
     opt = parser.parse_args()

@@ -215,9 +215,15 @@ def make_loss_compute(model, tgt_vocab, opt, train=True):
     own *LossCompute class, by subclassing LossComputeBase.
     """
     if opt.copy_attn:
-        compute = onmt.modules.CopyGeneratorLossCompute(
-            model.generator, tgt_vocab, opt.copy_attn_force,
-            opt.copy_loss_by_seqlength)
+        if opt.obj_f == "rl" and train:
+            compute = onmt.modules.RLGeneratorLossCompute(
+                model.generator, tgt_vocab, opt.copy_attn_force,
+                opt.copy_loss_by_seqlength)
+        else:
+            compute = onmt.modules.CopyGeneratorLossCompute(
+                model.generator, tgt_vocab, opt.copy_attn_force,
+                opt.copy_loss_by_seqlength)
+    
     else:
         compute = onmt.Loss.NMTLossCompute(
             model.generator, tgt_vocab,
@@ -378,7 +384,7 @@ def build_model(model_opt, opt, fields, checkpoint):
 def build_optim(model, checkpoint):
     saved_optimizer_state_dict = None
 
-    if opt.train_from:
+    if opt.train_from and False:
         print('Loading optimizer from checkpoint.')
         optim = checkpoint['optim']
         # We need to save a copy of optim.optimizer.state_dict() for setting
@@ -413,7 +419,7 @@ def build_optim(model, checkpoint):
         "(model.parameters())")
     show_optimizer_state(optim)
 
-    if opt.train_from:
+    if opt.train_from and False:
         # Stage 2: In this stage, which is only performed when loading an
         # optimizer from a checkpoint, we load the saved_optimizer_state_dict
         # into the re-created optimizer, to set the optim.optimizer.state
@@ -465,6 +471,11 @@ def main():
         checkpoint = torch.load(opt.train_from,
                                 map_location=lambda storage, loc: storage)
         model_opt = checkpoint['opt']
+        # for rl
+        model_opt.batch_size = opt.batch_size
+        model_opt.obj_f = opt.obj_f
+        model_opt.learning_rate = opt.learning_rate
+        model_opt.save_model = opt.save_model
         # I don't like reassigning attributes of opt: it's not clear.
         opt.start_epoch = checkpoint['epoch'] + 1
     else:

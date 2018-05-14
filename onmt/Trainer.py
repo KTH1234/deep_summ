@@ -19,6 +19,7 @@ import onmt
 import onmt.io
 import onmt.modules
 
+from torch.autograd import Variable
 
 class Statistics(object):
     """
@@ -29,17 +30,24 @@ class Statistics(object):
     * perplexity
     * elapsed time
     """
-    def __init__(self, loss=0, n_words=0, n_correct=0):
+    def __init__(self, loss=0, n_words=0, n_correct=0, reward=None):
         self.loss = loss
         self.n_words = n_words
         self.n_correct = n_correct
         self.n_src_words = 0
         self.start_time = time.time()
+        self.reward = reward
+            
 
     def update(self, stat):
         self.loss += stat.loss
         self.n_words += stat.n_words
         self.n_correct += stat.n_correct
+        if self.reward is not None and stat.reward is not None:
+            self.reward += stat.reward
+#             print("trainer line:48 reward", self.reward)
+        else:
+            self.reward = stat.reward
 
     def accuracy(self):
         return 100 * (self.n_correct / self.n_words)
@@ -72,6 +80,9 @@ class Statistics(object):
                self.n_src_words / (t + 1e-5),
                self.n_words / (t + 1e-5),
                time.time() - start))
+        if self.reward is not None:
+            print("reward : {}".format(self.reward / 50)) # default report every 
+            self.reward = None
         sys.stdout.flush()
 
     def log(self, prefix, experiment, lr):
@@ -124,6 +135,7 @@ class Trainer(object):
         self.norm_method = norm_method
         self.grad_accum_count = grad_accum_count
         self.progress_step = 0
+        self.reward = onmt.modules.Reward() #for reward
 
         assert(grad_accum_count > 0)
         if grad_accum_count > 1:
@@ -144,8 +156,8 @@ class Trainer(object):
         Returns:
             stats (:obj:`onmt.Statistics`): epoch loss statistics
         """
-        print("Trainer line:147 train_iter dataset")
-        print(train_iter.datasets)
+#         print("Trainer line:147 train_iter dataset")
+#         print(train_iter.datasets)
         
         total_stats = Statistics()
         report_stats = Statistics()
@@ -165,20 +177,26 @@ class Trainer(object):
         for i, batch in enumerate(train_iter):
             # batch는 example과 유사하다고 생각하면 될 듯
             cur_dataset = train_iter.get_cur_dataset()
-            print("Trainer line:167 batch dataset fields src")
-            print(len(batch.dataset.fields['src'].vocab.freqs))
-            print("Trainer line:167 batch alignment")
-            print(batch.dataset) # textdataset
-            print(len(batch.dataset.examples)) # torchtext.examples
-            print(vars(batch.dataset.examples[0]))
-            print(len(batch.dataset.src_vocabs))
-            print(batch.dataset.src_vocabs[0].freqs) # 이게 dynamic dict에서 생성된 vocab
-            print(type(batch))
+#             print("Trainer line:167 batch dataset fields src")
+#             print(len(batch.dataset.fields['src'].vocab.freqs))
+#             print(len(batch.dataset.fields['tgt'].vocab.freqs))
+#             print(len(batch))
+#             print("Trainer line:167 batch alignment")
+#             print(batch.dataset) # textdataset
+#             print(len(batch.dataset.examples)) # torchtext.examples
+#             print(vars(batch.dataset.examples[0]))
+#             print(len(batch.dataset.src_vocabs))
+#             print(batch.dataset.src_vocabs[0].freqs) # 이게 dynamic dict에서 생성된 vocab
+#             print(type(batch))
             
-            print(list(batch.fields)) # 이게 key형태로 저장되었음
-            print(batch.indices)
-            print(batch.alignment)            
-            print()
+#             print(list(batch.fields)) # 이게 key형태로 저장되었음
+# #             print(batch.indices)
+#             print(batch.alignment)            
+#             print()
+#             print(batch.indices) # 10,000개식 저장됨
+            __index = batch.indices.data[0]
+#             print(batch.dataset.examples[__index].src)
+#             input("Trainer line:184")
             self.train_loss.cur_dataset = cur_dataset
 
             true_batchs.append(batch)
@@ -286,9 +304,9 @@ class Trainer(object):
             'optim': self.optim,
         }
         torch.save(checkpoint,
-                   '%s_acc_%.2f_ppl_%.2f_e%d.pt'
-                   % (opt.save_model, valid_stats.accuracy(),
-                      valid_stats.ppl(), epoch))
+                   '%s_e%d_acc_%.2f_ppl_%.2f.pt'
+                   % (opt.save_model, epoch, valid_stats.accuracy(),
+                      valid_stats.ppl(), ))
 
     def _gradient_accumulation(self, true_batchs, total_stats,
                                report_stats, normalization):
@@ -296,6 +314,7 @@ class Trainer(object):
             self.model.zero_grad()
 
         for batch in true_batchs:
+#             print("trainer line:306 new batch")
             target_size = batch.tgt.size(0)
             # Truncated BPTT
             if self.trunc_size:
@@ -304,6 +323,8 @@ class Trainer(object):
                 trunc_size = target_size
 
             dec_state = None
+            sec_dec_state = dec_state.clone() if dec_state else None
+            
             src = onmt.io.make_features(batch, 'src', self.data_type)
             if self.data_type == 'text':
                 _, src_lengths = batch.src
@@ -326,27 +347,92 @@ class Trainer(object):
                 # 1. Create truncated target.
                 tgt = tgt_outer[j: j + trunc_size]
                 
+                if self.model.obj_f == "ml":
+                    # 2. F-prop all but generator.
+                    if self.grad_accum_count == 1:
+                        self.model.zero_grad()
+                    outputs, attns, dec_state = \
+                        self.model(src, tgt, src_lengths, dec_state, batch)
+#                     print("Trainer line:346 outputs", outputs.size())                        
+#                     print("Trainer line:347 tgt", tgt.size())   
+                    # 3. Compute loss in shards for memory efficiency.
+                    batch_stats = self.train_loss.sharded_compute_loss(
+                            batch, outputs, attns, j,
+                            trunc_size, self.shard_size, normalization)
 
-                # 2. F-prop all but generator.
-                if self.grad_accum_count == 1:
-                    self.model.zero_grad()
-                outputs, attns, dec_state = \
-                    self.model(src, tgt, src_lengths, dec_state)
+                    # 4. Update the parameters and statistics.
+                    if self.grad_accum_count == 1:
+                        self.optim.step()
+                    total_stats.update(batch_stats)
+                    report_stats.update(batch_stats)
 
-                # 3. Compute loss in shards for memory efficiency.
-                batch_stats = self.train_loss.sharded_compute_loss(
-                        batch, outputs, attns, j,
-                        trunc_size, self.shard_size, normalization)
+                    # If truncated, don't backprop fully.
+                    if dec_state is not None:
+                        dec_state.detach()
+                elif self.model.obj_f == "rl":
+                    # 2. F-prop all but generator.
+                    if self.grad_accum_count == 1:
+                        self.model.zero_grad()
+                    
+                    outputs, attns, dec_state, probs, out_indices = \
+                        self.model.sample(src, tgt, src_lengths, dec_state, batch, "sample")
+                        
+                    _, _, sec_dec_state, max_probs, max_out_indices = \
+                        self.model.sample(src, tgt, src_lengths, sec_dec_state, batch, "greedy")
 
-                # 4. Update the parameters and statistics.
-                if self.grad_accum_count == 1:
-                    self.optim.step()
-                total_stats.update(batch_stats)
-                report_stats.update(batch_stats)
+                     # apply padding info to sampled res
+#                     out_indices = out_indices.mul(batch.tgt.data[1:].gt(3).long()) + batch.tgt.data[1:].mul(batch.tgt.data[1:].le(3).long())
+#                     max_out_indices = max_out_indices.mul(batch.tgt.data[1:].gt(3).long()) + batch.tgt.data[1:].mul(batch.tgt.data[1:].le(3).long())
+                        
+                    batch_scores, sample_scores, max_scores = self.reward.get_batch_reward(batch, out_indices, max_out_indices)
+#                     print("trainer line:371 batch_scores", batch_scores)
+#                     print("trainer line:372 probs", torch.sum(probs,0))   
+#                     loss = self.reward.criterion(probs, out_indices, Variable(batch_scores, requires_grad=False).cuda())
+#                     loss = self.reward.criterion(max_probs, out_indices, Variable(batch_scores, requires_grad=False).cuda())
+#                     print("Trainer line:377 outputs", outputs.size())
+#                     print("Trainer line:378 tgt", tgt.size())
+#                     print("Trainer line:379 out_indices", out_indices)
+                    
 
-                # If truncated, don't backprop fully.
-                if dec_state is not None:
-                    dec_state.detach()
+#                     print("trainer line:384 batch.tgt",  batch.tgt)
+#                     print("trainer line:384 batch.tht.le(3)",  batch.tgt[1:].le(3))
+            
+#                     print("trainer line:385 batch.tht.gt(3)",  batch.tgt[1:].gt(3))
+#                     print("trainer line:386 padded sample 1", out_indices.mul(batch.tgt.data[1:].gt(3).long()))
+#                     print("trainer line:386 padded sample 2", batch.tgt.data[1:].mul(batch.tgt.data[1:].le(3).long()))
+                    # make sample to align with padding
+                    batch.tgt.data[1:] =  out_indices
+#                     print("trainer line:390 batch.tgt",  batch.tgt)
+                    
+                   
 
+                            # 3. Compute loss in shards for memory efficiency.
+                    batch_stats = self.train_loss.sharded_compute_loss(
+                            batch, outputs, attns, j,
+                            trunc_size, self.shard_size, normalization, rewards=Variable(batch_scores, requires_grad=False).cuda())
+                    
+    
+#                     loss.backward()
+#                     print("trainer line:372 loss", loss, j)   
+#                     print("trainer line:385 batch.tgt", batch.tgt) # tgt_len * batch size
+#                     input("trainer line:373")
+
+                    
+                    # 3. Compute loss in shards for memory efficiency.
+#                     batch_stats = self.train_loss.sharded_compute_loss(
+#                             batch, outputs, attns, j,
+#                             trunc_size, self.shard_size, normalization, backward=False)
+#                     batch_stats = Statistics(loss)
+
+                    # 4. Update the parameters and statistics.
+                    if self.grad_accum_count == 1:
+                        self.optim.step()
+                    total_stats.update(batch_stats)
+                    report_stats.update(batch_stats)
+
+                    # If truncated, don't backprop fully.
+                    if dec_state is not None:
+                        dec_state.detach()
+                    
         if self.grad_accum_count > 1:
             self.optim.step()

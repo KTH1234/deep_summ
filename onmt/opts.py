@@ -212,6 +212,13 @@ def train_opts(parser):
     # Model loading/saving options
 
     group = parser.add_argument_group('General')
+    
+    # add for deep summarization
+    # ml, rl, hybrid
+    group.add_argument('-obj_f', type=str, default="ml", required=True,
+                       help="""objective function for deep summarization""")
+    
+    
     group.add_argument('-data', required=True,
                        help="""Path prefix to the ".train.pt" and
                        ".valid.pt" file path from preprocess.py""")

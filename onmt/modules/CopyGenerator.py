@@ -82,6 +82,7 @@ class CopyGenerator(nn.Module):
         batch_by_tlen, _ = hidden.size()
         batch_by_tlen_, slen = attn.size()
         slen_, batch, cvocab = src_map.size()
+#         print("copygenerator line:85 hidden size, attn size", batch_by_tlen, batch_by_tlen_)
         aeq(batch_by_tlen, batch_by_tlen_)
         aeq(slen, slen_)
 
@@ -123,6 +124,8 @@ class CopyGeneratorCriterion(object):
         # Get scores for tokens in target
         tmp = scores.gather(1, target.view(-1, 1)).view(-1)
 
+
+
         # Regular prob (no unks and unks that can't be copied)
         if not self.force_copy:
             # Add score for non-unks in target
@@ -132,9 +135,18 @@ class CopyGeneratorCriterion(object):
         else:
             # Forced copy. Add only probability for not-copied tokens
             out = out + tmp.mul(align_unk)
+            
+#         print("CopyGenerator line:127 out", out.size())
+#         print("CopyGenerator line:128 tmp", tmp.size())
+#         print("CopyGenerator line:128 target size", target.size())
+#         print("CopyGenerator line:129 scores size", scores.size())
+#         input()        
+        
+
 
         # Drop padding.
         loss = -out.log().mul(target.ne(self.pad).float())
+#         print("CopyGenerator line:140 loss", loss)
         return loss
 
 
@@ -161,10 +173,11 @@ class CopyGeneratorLossCompute(onmt.Loss.LossComputeBase):
         if getattr(batch, "alignment", None) is None:
             raise AssertionError("using -copy_attn you need to pass in "
                                  "-dynamic_dict during preprocess stage.")
-        print("CopyGenerator line 163",batch.src)
-        print("CopyGenerator line 164",batch.tgt[range_[0] + 1: range_[1]])
-        print("CopyGenerator line 165",batch.alignment[range_[0] + 1: range_[1]])
-        print("CopyGenerator line 166",type(batch))
+#         print("CopyGenerator line 163",batch.src)
+#         print("CopyGenerator line 164",batch.tgt[range_[0] + 1: range_[1]])
+#         print("CopyGenerator line 165",batch.alignment[range_[0] + 1: range_[1]])
+#         print("CopyGenerator line 166",type(batch))
+#         print("CopyGenerator line:180 out", output.size())
         
         return {
             "output": output,
@@ -183,21 +196,24 @@ class CopyGeneratorLossCompute(onmt.Loss.LossComputeBase):
             copy_attn: the copy attention value.
             align: the align info.
         """
+#         print("CopyGenerator line:198 out", output.size())
+#         print("CopyGenerator line:198 align size", align.size())
         target = target.view(-1)
         align = align.view(-1)
-        print("CopyGenerator line:187", output)
+#         print("CopyGenerator line:187", output)
         scores = self.generator(self._bottle(output),
                                 self._bottle(copy_attn),
                                 batch.src_map)
-        print("CopyGenerator line:191", scores)
-        input()
+#         print("CopyGenerator line:191", scores)
+
         loss = self.criterion(scores, align, target)
         scores_data = scores.data.clone()
         scores_data = onmt.io.TextDataset.collapse_copy_scores(
                 self._unbottle(scores_data, batch.batch_size),
                 batch, self.tgt_vocab, self.cur_dataset.src_vocabs)
         scores_data = self._bottle(scores_data)
-
+#         print("CopyGenerator line:202", scores_data)        
+        
         # Correct target copy token instead of <unk>
         # tgt[i] = align[i] + len(tgt_vocab)
         # for i such that tgt[i] == 0 and align[i] != 0
@@ -214,7 +230,7 @@ class CopyGeneratorLossCompute(onmt.Loss.LossComputeBase):
             # Compute Loss as NLL divided by seq length
             # Compute Sequence Lengths
             pad_ix = batch.dataset.fields['tgt'].vocab.stoi[onmt.io.PAD_WORD]
-            tgt_lens = batch.tgt.ne(pad_ix).float().sum(0)
+            tgt_lens = batch.tgt.ne(pad_ix).sum(0).float()
             # Compute Total Loss per sequence in batch
             loss = loss.view(-1, batch.batch_size).sum(0)
             # Divide by length of each sequence and sum
@@ -222,6 +238,8 @@ class CopyGeneratorLossCompute(onmt.Loss.LossComputeBase):
         else:
             loss = loss.sum()
 
+#         print("copygenerator line:228 loss summed?", loss)
+#         input()
         return loss, stats
 
     

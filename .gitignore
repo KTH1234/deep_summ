@@ -110,3 +110,6 @@ ENV/
 
 # Tensorboard
 runs/
+
+# article_Data
+article_data/

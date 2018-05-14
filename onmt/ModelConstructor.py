@@ -186,6 +186,11 @@ def make_base_model(model_opt, fields, gpu, checkpoint=None):
     # Make NMTModel(= encoder + decoder).
     model = NMTModel(encoder, decoder)
     model.model_type = model_opt.model_type
+    
+    # for deep summarization
+    model.obj_f = model_opt.obj_f
+    print("ModelConstructor line:191, model.obj_f")
+    print(model.obj_f)
 
     # Make Generator.
     if not model_opt.copy_attn:

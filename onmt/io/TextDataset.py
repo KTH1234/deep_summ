@@ -82,10 +82,10 @@ class TextDataset(ONMTDatasetBase):
 
         out_examples = []
         for ex_values in example_values:
-            print("TextDataset, line:85", len(ex_values))
-            print("TextDataset, line:86", ex_values)
-            print("TextDataset, line:87", out_fields)
-            input()
+#             print("TextDataset, line:85", len(ex_values))
+#             print("TextDataset, line:86", ex_values)
+#             print("TextDataset, line:87", out_fields)
+#             input()
             example = self._construct_example_fromlist(
                 ex_values, out_fields)
             src_size += len(example.src)
@@ -298,8 +298,8 @@ class TextDataset(ONMTDatasetBase):
                     [0] + [src_vocab.stoi[w] for w in tgt] + [0])
                 example["alignment"] = mask
                         
-                print("Textdataset line:301", example["alignment"])
-                input()  
+#                 print("Textdataset line:301", example["alignment"])
+#                 input()  
             yield example
 
 

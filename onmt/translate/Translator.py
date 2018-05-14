@@ -12,6 +12,7 @@ import onmt.translate.Beam
 import onmt.io
 import onmt.opts
 
+torch.backends.cudnn.enabled = False
 
 def make_translator(opt, report_score=True, out_file=None):
     if out_file is None:
@@ -195,6 +196,7 @@ class Translator(object):
                         output += row_format.format(word, *row) + '\n'
                         row_format = "{:>10.10} " + "{:>10.7f} " * len(srcs)
                     os.write(1, output.encode('utf-8'))
+            batch = None
 
         if self.report_score:
             self._report_score('PRED', pred_score_total, pred_words_total)
@@ -281,7 +283,9 @@ class Translator(object):
             if data_type == 'text' and self.copy_attn else None
         memory_bank = rvar(memory_bank.data)
         memory_lengths = src_lengths.repeat(beam_size)
-        dec_states.repeat_beam_size_times(beam_size)
+        dec_states.repeat_beam_size_times(beam_size)        
+        
+        self.model.decoder.init_attn_history() # init attn history in decoder for new attention
 
         # (3) run the decoder to generate sentences, using beam search.
         for i in range(self.max_length):
@@ -292,6 +296,8 @@ class Translator(object):
             # Get all the pending current beam words and arrange for forward.
             inp = var(torch.stack([b.get_current_state() for b in beam])
                       .t().contiguous().view(1, -1))
+#             print("Translator line:295 inp", inp)
+#             input("translator line296")
 
             # Turn any copied words to UNKs
             # 0 is unk
