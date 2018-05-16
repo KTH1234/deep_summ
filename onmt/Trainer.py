@@ -408,6 +408,7 @@ class Trainer(object):
 #                     print("trainer line:408 index",  out_indices)
 #                     batch.tgt.data[1:] =  out_indices
 #                     print("trainer line:390 batch.tgt",  batch.tgt)
+#                     print("trainer line:411 dec state",  dec_state)
 #                     input()
                     
                    

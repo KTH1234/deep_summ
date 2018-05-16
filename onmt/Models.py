@@ -630,7 +630,7 @@ class NMTModel(nn.Module):
         return decoder_outputs, attns, dec_state
 
     
-    def sample(self, src, tgt, lengths, dec_state=None, batch=None, mode="sample"):
+    def sample(self, src, tgt, lengths, dec_states=None, batch=None, mode="sample"):
         """Forward propagate a `src` and `tgt` pair for training.
         Possible initialized with a beginning decoder state.
 
@@ -643,7 +643,7 @@ class NMTModel(nn.Module):
             tgt (:obj:`LongTensor`):
                  a target sequence of size `[tgt_len x batch]`.
             lengths(:obj:`LongTensor`): the src lengths, pre-padding `[batch]`.
-            dec_state (:obj:`DecoderState`, optional): initial decoder state
+            dec_states (:obj:`DecoderState`, optional): initial decoder state
         Returns:
             (:obj:`FloatTensor`, `dict`, :obj:`onmt.Models.DecoderState`):
 
@@ -702,7 +702,7 @@ class NMTModel(nn.Module):
                     
             # Run one step.
             dec_out, dec_states, attn = self.decoder(
-                inp, memory_bank, enc_state if dec_state is None
+                inp, memory_bank, enc_state if dec_states is None
                     else dec_states, memory_lengths=lengths)
             dec_out = dec_out.squeeze(0)
             # dec_out: beam x rnn_size                    
@@ -805,7 +805,7 @@ class NMTModel(nn.Module):
 #         print("model line 770 probx, out_indices", probs.size(), out_indices.size()) # tgt_len * batch size
 #         input("model line:771")
     
-        return decoder_outputs, attns, dec_state, probs, out_indices
+        return decoder_outputs, attns, dec_states, probs, out_indices
     
 
 class DecoderState(object):
