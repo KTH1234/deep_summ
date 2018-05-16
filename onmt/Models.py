@@ -744,8 +744,24 @@ class NMTModel(nn.Module):
 #                 print("model line 734, index", index)
 #                 print("model line 735, out", out)
                 prob = out.gather(1, Variable(index, requires_grad=False)) # batchsize * 1
+    
+            index = index.view(-1)
+        
+            # control intermediate termination 
+            # eos index is 3
+            # padding index is 1
+            if i == 0:
+                unfinished = index != 3
+            else:
+                unfinished = unfinished * ( out_indices[-1] != 3 )
+            if unfinished.sum() == 0:
+                break
+                
+            if len(out_indices) > 0:
+                index = index * unfinished.type_as(index) + (unfinished == 0).type_as(index) # pad 1
+            
             probs += [prob.view(-1)]
-            out_indices += [index.view(-1)]
+            out_indices += [index]
 
 #             print("model line:726 out_indices")
 #             for index in out_indices:

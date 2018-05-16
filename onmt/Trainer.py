@@ -395,14 +395,20 @@ class Trainer(object):
                     
 
 #                     print("trainer line:384 batch.tgt",  batch.tgt)
+#                     print("trainer line:384 batch.alignment",  batch.alignment)
+#                     input()
 #                     print("trainer line:384 batch.tht.le(3)",  batch.tgt[1:].le(3))
             
 #                     print("trainer line:385 batch.tht.gt(3)",  batch.tgt[1:].gt(3))
 #                     print("trainer line:386 padded sample 1", out_indices.mul(batch.tgt.data[1:].gt(3).long()))
 #                     print("trainer line:386 padded sample 2", batch.tgt.data[1:].mul(batch.tgt.data[1:].le(3).long()))
                     # make sample to align with padding
-                    batch.tgt.data[1:] =  out_indices
+#                     print("trainer line:405 eos", batch.dataset.fields['tgt'].vocab.stoi[onmt.io.EOS_WORD], onmt.io.EOS_WORD)
 #                     print("trainer line:390 batch.tgt",  batch.tgt)
+#                     print("trainer line:408 index",  out_indices)
+#                     batch.tgt.data[1:] =  out_indices
+#                     print("trainer line:390 batch.tgt",  batch.tgt)
+#                     input()
                     
                    
 
