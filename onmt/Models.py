@@ -655,7 +655,7 @@ class NMTModel(nn.Module):
         tgt = tgt[:-1]  # exclude last target from inputs
 
         enc_final, memory_bank = self.encoder(src, lengths)
-        enc_state = \
+        dec_states = \
             self.decoder.init_decoder_state(src, memory_bank, enc_final)
        
 #         print("model line 662 enc_state", enc_final)
@@ -678,7 +678,7 @@ class NMTModel(nn.Module):
             attns["copy"] = []
         if self.decoder._coverage:
             attns["coverage"] = []
-            
+                     
 #         print("model line:622, tgt.size", tgt.size(0))
         for i in range(tgt.size(0)):
             # initial bos tokens
@@ -692,18 +692,20 @@ class NMTModel(nn.Module):
 #                 input()
                 inp = Variable(out_indices[-1], requires_grad=False).cuda().unsqueeze(0).unsqueeze(2)
                 
-#                 print("model line:682 inp", i, inp.view(1,-1))
+
+
 
             # Turn any copied words to UNKs
             # 0 is unk
             if self.decoder.copy_attn:
                 inp = inp.masked_fill(
                     inp.gt(len(batch.dataset.fields['tgt'].vocab) - 1), 0)
-                    
+#             inp = inp.unsqueeze(2)             
+#             print("model line:682 inp", i, inp)
+
             # Run one step.
             dec_out, dec_states, attn = self.decoder(
-                inp, memory_bank, enc_state if dec_states is None
-                    else dec_states, memory_lengths=lengths)
+                inp, memory_bank, dec_states, memory_lengths=lengths)
             dec_out = dec_out.squeeze(0)
             # dec_out: beam x rnn_size                    
 
@@ -718,32 +720,36 @@ class NMTModel(nn.Module):
                                                    attn["copy"].squeeze(0),
                                                    batch.src_map)
                 # batch x (tgt_vocab + extra_vocab)
-#                 print("model line:714 out prob", out)
-#                 out_data = batch.dataset.collapse_copy_scores(
-#                     _unbottle(out, len(batch)),
-#                     batch, batch.dataset.fields["tgt"].vocab, batch.dataset.src_vocabs)
+#                 print("model line:714 out dec_out", dec_out) # variable
+#                 print("model line:714 out prob", out) # variable
+#                 print("model line:729 out data prob", out) # batch * vocab size
+                out = batch.dataset.collapse_copy_scores(
+                    _unbottle(out.data, len(batch)),
+                    batch, batch.dataset.fields["tgt"].vocab, batch.dataset.src_vocabs)
                 # batch x tgt_vocab
 #                 out_data = out_data.log()
-                out = out.log() # batch_size * (tgt_vocab + ext)
-
-#             print("model line:729 out data prob", out)
+                out = out.log().squeeze(0) # batch_size * (tgt_vocab + ext)
+                
+#             print("model line:729 out mode", mode)
+#             print("model line:729 out data prob", out) # batch * vocab size
 #             input()
 
             if mode == "greedy":
-                _, index = torch.max(out.data,1)
+#                 _, index = torch.max(out.data,1)
+                _, index = torch.max(out,1)
 #                 print("model line 734, index", index)
 #                 print("model line 735, out", out)
-                prob = out.gather(1, Variable(index.unsqueeze(1), requires_grad=False)) # batchsize * 1
+#                 prob = out.gather(1, Variable(index.unsqueeze(1), requires_grad=False)) # batchsize * 1
                 # prob : 1*batch size
                 # index : 1*batcch size
             elif mode == "sample": 
 #                 print("model line:734 multi", torch.exp(out.squeeze(0)))
 #                 input()
 #                 index = torch.multinomial(torch.exp(out.data.squeeze(0)),1) # batchsize*1
-                index = torch.multinomial(torch.exp(out.data),1) # batchsize*1
+                index = torch.multinomial(torch.exp(out),1) # batchsize*1
 #                 print("model line 734, index", index)
 #                 print("model line 735, out", out)
-                prob = out.gather(1, Variable(index, requires_grad=False)) # batchsize * 1
+#                 prob = out.gather(1, Variable(index, requires_grad=False)) # batchsize * 1
     
             index = index.view(-1)
         
@@ -758,9 +764,12 @@ class NMTModel(nn.Module):
                 break
                 
             if len(out_indices) > 0:
+#                 print("Model line 766: index", index)
                 index = index * unfinished.type_as(index) + (unfinished == 0).type_as(index) # pad 1
+#                 print("Model line 766: index", index)
+#                 print("Model line 767: unfinished", unfinished)
             
-            probs += [prob.view(-1)]
+#             probs += [prob.view(-1)]
             out_indices += [index]
 
 #             print("model line:726 out_indices")
@@ -800,12 +809,13 @@ class NMTModel(nn.Module):
         for k in attns:
             attns[k] = torch.stack(attns[k])              
     
-        probs = torch.stack(probs)
+#         probs = torch.stack(probs)
         out_indices = torch.stack(out_indices)
 #         print("model line 770 probx, out_indices", probs.size(), out_indices.size()) # tgt_len * batch size
 #         input("model line:771")
     
-        return decoder_outputs, attns, dec_states, probs, out_indices
+#         return decoder_outputs, attns, dec_states, probs, out_indices
+        return decoder_outputs, attns, dec_states, out_indices
     
 
 class DecoderState(object):

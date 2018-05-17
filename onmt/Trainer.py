@@ -374,11 +374,19 @@ class Trainer(object):
                     if self.grad_accum_count == 1:
                         self.model.zero_grad()
                     
-                    outputs, attns, dec_state, probs, out_indices = \
+#                     outputs, attns, dec_state, probs, out_indices = \
+#                         self.model.sample(src, tgt, src_lengths, dec_state, batch, "sample")
+                        
+#                     _, _, sec_dec_state, max_probs, max_out_indices = \
+#                         self.model.sample(src, tgt, src_lengths, sec_dec_state, batch, "greedy")
+    
+    
+                    outputs, attns, dec_state, out_indices = \
                         self.model.sample(src, tgt, src_lengths, dec_state, batch, "sample")
                         
-                    _, _, sec_dec_state, max_probs, max_out_indices = \
-                        self.model.sample(src, tgt, src_lengths, sec_dec_state, batch, "greedy")
+                   
+                    _, _, sec_dec_state, max_out_indices = \
+                        self.model.sample(src, tgt, src_lengths, sec_dec_state, batch, "greedy")                        
 
                      # apply padding info to sampled res
 #                     out_indices = out_indices.mul(batch.tgt.data[1:].gt(3).long()) + batch.tgt.data[1:].mul(batch.tgt.data[1:].le(3).long())
@@ -403,10 +411,14 @@ class Trainer(object):
 #                     print("trainer line:386 padded sample 1", out_indices.mul(batch.tgt.data[1:].gt(3).long()))
 #                     print("trainer line:386 padded sample 2", batch.tgt.data[1:].mul(batch.tgt.data[1:].le(3).long()))
                     # make sample to align with padding
-#                     print("trainer line:405 eos", batch.dataset.fields['tgt'].vocab.stoi[onmt.io.EOS_WORD], onmt.io.EOS_WORD)
-#                     print("trainer line:390 batch.tgt",  batch.tgt)
-#                     print("trainer line:408 index",  out_indices)
-#                     batch.tgt.data[1:] =  out_indices
+#                     print("trainer line:405 eos", batch.dataset.fields['tgt'].vocab.stoi[onmt.io.EOS_WORD], onmt.io.EOS_WORD) # </s>
+#                     print("trainer line:405 4", batch.dataset.fields['tgt'].vocab.itos[4], 4) # ,
+#                     print("trainer line:405 5", batch.dataset.fields['tgt'].vocab.itos[5], 5) # 하        
+#                     print("trainer line:405 6", batch.dataset.fields['tgt'].vocab.itos[6], 6) # 이                           
+#                     print("trainer line:408 tgt",  tgt) # 51(max length?) * batchsize * 1
+#                     print("trainer line:390 batch.tgt",  batch.tgt) # 51(max length) * batch size 
+#                     print("trainer line:408 index",  out_indices) # 50(max length) * batch size
+                    batch.tgt.data[1:] =  out_indices
 #                     print("trainer line:390 batch.tgt",  batch.tgt)
 #                     print("trainer line:411 dec state",  dec_state)
 #                     input()
