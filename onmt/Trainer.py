@@ -418,10 +418,11 @@ class Trainer(object):
 #                     print("trainer line:408 tgt",  tgt) # 51(max length?) * batchsize * 1
 #                     print("trainer line:390 batch.tgt",  batch.tgt) # 51(max length) * batch size 
 #                     print("trainer line:408 index",  out_indices) # 50(max length) * batch size
-                    batch.tgt.data[1:] =  out_indices
+                    batch.tgt.data[1:] = 1
+                    batch.tgt.data[1:out_indices.size(0)+1] =  out_indices
 #                     print("trainer line:390 batch.tgt",  batch.tgt)
 #                     print("trainer line:411 dec state",  dec_state)
-#                     input()
+                    input()
                     
                    
 
