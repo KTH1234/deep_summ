@@ -308,8 +308,8 @@ class Translator(object):
             # Temporary kludge solution to handle changed dim expectation
             # in the decoder
             inp = inp.unsqueeze(2)
-            print("Translator line:310 inp", inp)
-            input()
+#             print("Translator line:310 inp", inp)
+#             input()
 
             # Run one step.
             dec_out, dec_states, attn = self.model.decoder(

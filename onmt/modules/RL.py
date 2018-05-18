@@ -46,6 +46,9 @@ class RLGeneratorCriterion(object):
             # Forced copy. Add only probability for not-copied tokens
             out = out + tmp.mul(align_unk)
             
+        # 05.18 remove copy related things
+        out = tmp
+            
 #         print("CopyGenerator line:136 out", out)
 #         print("RL line:31 out",out.size())
 #         print("RL line:32 scores",scores)
