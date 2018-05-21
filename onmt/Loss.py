@@ -126,13 +126,14 @@ class LossComputeBase(nn.Module):
         shard_state = self._make_shard_state(batch, output, range_, attns)
 
         for shard in shards(shard_state, shard_size):
-#             print("Loss, line:123", shard)
-#             input()
+            print("Loss, line:123", shard)
+
             loss, stats = self._compute_loss(batch, **shard)
             if backward:
                 loss.div(normalization).backward()
             batch_stats.update(stats)
 
+        input()            
         return batch_stats
 
     def _stats(self, loss, scores, target, reward=None):
@@ -264,7 +265,11 @@ def shards(state, shard_size, eval=False):
         # over the shards, not over the keys: therefore, the values need
         # to be re-zipped by shard and then each shard can be paired
         # with the keys.
-#         print("line:260 Loss", values)
+#         print("line:260 keys", keys)
+#         print("line:260 values", values)    
+        
+#         for shard_tensors in zip(*values):
+#             print("line:260 for", dict(zip(keys, shard_tensors)))
         
         for shard_tensors in zip(*values):
             yield dict(zip(keys, shard_tensors))

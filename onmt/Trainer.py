@@ -12,6 +12,8 @@ users of this library) for the strategy things we do.
 import time
 import sys
 import math
+import traceback
+
 import torch
 import torch.nn as nn
 
@@ -123,7 +125,7 @@ class Trainer(object):
 
     def __init__(self, model, train_loss, valid_loss, optim,
                  trunc_size=0, shard_size=32, data_type='text',
-                 norm_method="sents", grad_accum_count=1):
+                 norm_method="sents", grad_accum_count=1, opt=None):
         # Basic attributes.
         self.model = model
         self.train_loss = train_loss
@@ -135,6 +137,7 @@ class Trainer(object):
         self.norm_method = norm_method
         self.grad_accum_count = grad_accum_count
         self.progress_step = 0
+        self.opt = opt
         self.reward = onmt.modules.Reward() #for reward
 
         assert(grad_accum_count > 0)
@@ -392,12 +395,15 @@ class Trainer(object):
 #                     out_indices = out_indices.mul(batch.tgt.data[1:].gt(3).long()) + batch.tgt.data[1:].mul(batch.tgt.data[1:].le(3).long())
 #                     max_out_indices = max_out_indices.mul(batch.tgt.data[1:].gt(3).long()) + batch.tgt.data[1:].mul(batch.tgt.data[1:].le(3).long())
                         
-                    batch_scores, sample_scores, max_scores = self.reward.get_batch_reward(batch, out_indices, max_out_indices)
+                    batch_scores, sample_scores, max_scores, sample_alignments = self.reward.get_batch_reward(batch, out_indices, max_out_indices)
 #                     print("trainer line:371 batch_scores", batch_scores)
+                    batch_scores = batch_scores.expand(out_indices.size(0),batch_scores.size(0))
+#                     print("trainer line:398 batch_scores", batch_scores)
 #                     print("trainer line:372 probs", torch.sum(probs,0))   
 #                     loss = self.reward.criterion(probs, out_indices, Variable(batch_scores, requires_grad=False).cuda())
 #                     loss = self.reward.criterion(max_probs, out_indices, Variable(batch_scores, requires_grad=False).cuda())
 #                     print("Trainer line:377 outputs", outputs.size())
+    
 #                     print("Trainer line:378 tgt", tgt.size())
 #                     print("Trainer line:379 out_indices", out_indices)
                     
@@ -418,18 +424,33 @@ class Trainer(object):
 #                     print("trainer line:408 tgt",  tgt) # 51(max length?) * batchsize * 1
 #                     print("trainer line:390 batch.tgt",  batch.tgt) # 51(max length) * batch size 
 #                     print("trainer line:408 index",  out_indices) # 50(max length) * batch size
-                    batch.tgt.data[1:] = 1
-                    batch.tgt.data[1:out_indices.size(0)+1] =  out_indices
-#                     print("trainer line:390 batch.tgt",  batch.tgt)
+#                     print("trainer line:390 batch.tgt size",  batch.tgt)
+#                     print("Trainer line:429 alignments", batch.alignment)
+#                     batch.tgt.data[1:] = 1
+#                     batch.tgt.data[1:out_indices.size(0)+1] =  out_indices
+#                     print("Trainer line:429 batch.tgt.data", batch.tgt.data)
+#                     print("Trainer line:430 batch.tgt.data[0]", out_indices)
+                    batch.tgt.data = torch.cat((batch.tgt.data[0].unsqueeze(0), out_indices))
+#                     print("trainer line:434 batch alignmnet", batch.alignment)    
+                    batch.alignment = Variable(sample_alignments.contiguous(), requires_grad=False)
+#                     print("trainer line:436 batch tgt", batch.tgt.size())    
+#                     print("trainer line:436 after batch alignmnet", batch.alignment.size())    
+#                     print("trainer line:437 output ", outputs.size())            
+
 #                     print("trainer line:411 dec state",  dec_state)
+
+#                     print("trainer line:431 batch.tgt size",  batch.tgt)                    
+#                     print("Trainer line:432 sample alignments", sample_alignments)
 #                     input()
                     
                    
 
                             # 3. Compute loss in shards for memory efficiency.
-                    batch_stats = self.train_loss.sharded_compute_loss(
+                    try:
+                        batch_stats = self.train_loss.sharded_compute_loss(
                             batch, outputs, attns, j,
                             trunc_size, self.shard_size, normalization, rewards=Variable(batch_scores, requires_grad=False).cuda())
+
                     
     
 #                     loss.backward()
@@ -445,14 +466,19 @@ class Trainer(object):
 #                     batch_stats = Statistics(loss)
 
                     # 4. Update the parameters and statistics.
-                    if self.grad_accum_count == 1:
-                        self.optim.step()
-                    total_stats.update(batch_stats)
-                    report_stats.update(batch_stats)
+                        if self.grad_accum_count == 1:
+                            self.optim.step()
+                        total_stats.update(batch_stats)
+                        report_stats.update(batch_stats)
 
-                    # If truncated, don't backprop fully.
-                    if dec_state is not None:
-                        dec_state.detach()
+                        # If truncated, don't backprop fully.
+                        if dec_state is not None:
+                            dec_state.detach()
+                    except RuntimeError as e:
+                        traceback.print_exc()
+                        print("Trainer line:438 outputs", outputs.size())
+                        print("Trainer line:439 batch alignment", batch.alignment.size()) 
+                        sys.exit(1)
                     
         if self.grad_accum_count > 1:
             self.optim.step()

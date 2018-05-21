@@ -29,6 +29,8 @@ class Reward():
         
         sample_scores = []
         max_scores = []
+        alignments = [] # for efficiency, calculate alignments here
+        
         for i in range(len(batch)):
             in_batch_index = batch.indices.data[i]
 #             print("Reward line:11 in batch index",in_batch_index)
@@ -46,8 +48,10 @@ class Reward():
             sample_rouge_f1_s = self.calculate_rouge(sample_tokens, raw_tokens)
             max_rouge_f1_s = self.calculate_rouge(max_tokens, raw_tokens)
             
-
-        
+            # calculate alginemts
+            mask = [0] + [src_vocab.stoi[w] for w in sample_tokens]
+            alignments.append(mask)
+            
 #             print("reward line:37 sample_tokens", sample_tokens)
 #             print("reward line:37 max_tokens", max_tokens)
         
@@ -65,13 +69,22 @@ class Reward():
                 print("\t\t", sample_scores[-1], sample_tokens)
                 print("\t max tokens")
                 print("\t\t", max_scores[-1], max_tokens)            
-                
+#         print("Rewards line:72 alignments", alignments )
         
+        max_sample_len = max(len(x) for x in alignments)
+        max_sample_len = max(sample_indices.size(0)+1, max_sample_len)
+#         print("Reward line:75 sample_indices", sample_indices.size())        
+#         print("Reward line:76 max", max(len(x) for x in alignments))
+        for i in range(len(alignments)):
+            alignments[i] += [0] * max(0, max_sample_len - len(alignments[i]))
+            alignments[i] = torch.LongTensor(alignments[i]).cuda()
+#         print("Rewards line:77 alignments", alignments )            
+        sample_alignments = torch.stack(alignments).transpose(0,1)
 #             print("reward line:29 rouge", sample_rouge_f1_s, max_rouge_f1_s)
         sample_scores = torch.Tensor(sample_scores).cuda()
         max_scores = torch.Tensor(max_scores).cuda()
         batch_scores = max_scores - sample_scores
-        return batch_scores, sample_scores, max_scores
+        return batch_scores, sample_scores, max_scores, sample_alignments
                
 
             

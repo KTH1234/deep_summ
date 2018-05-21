@@ -8,6 +8,7 @@ import onmt.io
 import onmt.modules
 from onmt.Utils import aeq
 
+import sys
 
 
 
@@ -26,9 +27,16 @@ class RLGeneratorCriterion(object):
         target_unk = target.eq(0).float()
         target_not_unk = target.ne(0).float()
 
+        try:
         # Copy probability of tokens in source
-        out = scores.gather(1, align.view(-1, 1) + self.offset).view(-1)        
+            out = scores.gather(1, align.view(-1, 1) + self.offset).view(-1)        
 #         out = scores.gather(1, align.view(-1, 1) + self.offset)
+        except RuntimeError:
+            print("RL line:34 socres size", scores.size())
+            print("RL line:35 align size", align.size())
+            sys.exit(1)
+        
+        
 
         
         # Set scores for unk to 0 and add eps
@@ -47,7 +55,7 @@ class RLGeneratorCriterion(object):
             out = out + tmp.mul(align_unk)
             
         # 05.18 remove copy related things
-        out = tmp
+#         out = tmp
             
 #         print("CopyGenerator line:136 out", out)
 #         print("RL line:31 out",out.size())
@@ -120,10 +128,10 @@ class RLGeneratorLossCompute(onmt.Loss.LossComputeBase):
         batch_stats = onmt.Statistics()
         range_ = (cur_trunc, cur_trunc + trunc_size)
         shard_state = self._make_shard_state(batch, output, range_, attns, rewards)
+#         print("RL line:131 range", range_)
 
         for shard in onmt.Loss.shards(shard_state, shard_size):
 #             print("Loss, line:123", shard)
-#             input()
             if 'rewards' not in shard:
                 print("rl line:121 validate")
                 loss, stats = self.validate_loss_compute(batch, **shard)        
@@ -132,7 +140,7 @@ class RLGeneratorLossCompute(onmt.Loss.LossComputeBase):
             if backward:
                 loss.div(normalization).backward()
             batch_stats.update(stats)
-
+#         input()
         return batch_stats        
 
     def _make_shard_state(self, batch, output, range_, attns, rewards=None):
@@ -148,7 +156,7 @@ class RLGeneratorLossCompute(onmt.Loss.LossComputeBase):
 #         print("RL line:141 batch.alignment size", batch.alignment.size())
 #         print("RL line:141 tar size", batch.tgt)
 #         print("RL line:141 range", range_)
-#         print("RL line:141 output", output.size())
+#         print("RL line:159 output", output.size())
         if rewards is None:
             return {
                 "output": output,
@@ -162,7 +170,7 @@ class RLGeneratorLossCompute(onmt.Loss.LossComputeBase):
             "target": batch.tgt[range_[0] + 1: range_[1]],
             "copy_attn": attns.get("copy"),
             "align": batch.alignment[range_[0] + 1: range_[1]],
-            "rewards": rewards.unsqueeze(0) # for shards
+            "rewards": rewards # for shards
 
         }
 
@@ -185,8 +193,9 @@ class RLGeneratorLossCompute(onmt.Loss.LossComputeBase):
 #         print("RL line:152 reward", rewards)
 
         stat_reward = (rewards.sum()/rewards.size()[1]).data[0]
+        rewards = rewards.contiguous().view(-1)
         
-        rewards = rewards.expand_as(align).contiguous().view(-1)
+#         rewards = rewards.expand_as(align).contiguous().view(-1)
 #         print("RL line:153 reward expands", rewards.unsqueeze(1).expand_as(align))
         target = target.view(-1)
         align = align.view(-1)

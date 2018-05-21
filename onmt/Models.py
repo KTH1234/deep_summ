@@ -589,24 +589,24 @@ class NMTModel(nn.Module):
 
     def forward(self, src, tgt, lengths, dec_state=None, batch=None):
         """Forward propagate a `src` and `tgt` pair for training.
-        Possible initialized with a beginning decoder state.
+            Possible initialized with a beginning decoder state.
 
-        Args:
-            src (:obj:`Tensor`):
-                a source sequence passed to encoder.
-                typically for inputs this will be a padded :obj:`LongTensor`
-                of size `[len x batch x features]`. however, may be an
-                image or other generic input depending on encoder.
-            tgt (:obj:`LongTensor`):
-                 a target sequence of size `[tgt_len x batch]`.
-            lengths(:obj:`LongTensor`): the src lengths, pre-padding `[batch]`.
-            dec_state (:obj:`DecoderState`, optional): initial decoder state
-        Returns:
-            (:obj:`FloatTensor`, `dict`, :obj:`onmt.Models.DecoderState`):
+            Args:
+                src (:obj:`Tensor`):
+                    a source sequence passed to encoder.
+                    typically for inputs this will be a padded :obj:`LongTensor`
+                    of size `[len x batch x features]`. however, may be an
+                    image or other generic input depending on encoder.
+                tgt (:obj:`LongTensor`):
+                     a target sequence of size `[tgt_len x batch]`.
+                lengths(:obj:`LongTensor`): the src lengths, pre-padding `[batch]`.
+                dec_state (:obj:`DecoderState`, optional): initial decoder state
+            Returns:
+                (:obj:`FloatTensor`, `dict`, :obj:`onmt.Models.DecoderState`):
 
-                 * decoder output `[tgt_len x batch x hidden]`
-                 * dictionary attention dists of `[tgt_len x batch x src_len]`
-                 * final decoder state
+                     * decoder output `[tgt_len x batch x hidden]`
+                     * dictionary attention dists of `[tgt_len x batch x src_len]`
+                     * final decoder state
         """
 #         print("model line:602", self.obj_f)
         tgt = tgt[:-1]  # exclude last target from inputs
@@ -630,7 +630,7 @@ class NMTModel(nn.Module):
         return decoder_outputs, attns, dec_state
 
     
-    def sample(self, src, tgt, lengths, dec_states=None, batch=None, mode="sample"):
+    def sample(self, src, tgt, lengths, dec_states=None, batch=None, mode="sample", eos_index=3):
         """Forward propagate a `src` and `tgt` pair for training.
         Possible initialized with a beginning decoder state.
 
@@ -651,6 +651,7 @@ class NMTModel(nn.Module):
                  * dictionary attention dists of `[tgt_len x batch x src_len]`
                  * final decoder state
         """
+        
 #         print("model line:602", self.obj_f)
         tgt = tgt[:-1]  # exclude last target from inputs
 
@@ -757,9 +758,9 @@ class NMTModel(nn.Module):
             # eos index is 3
             # padding index is 1
             if i == 0:
-                unfinished = index != 3
+                unfinished = index != eos_index
             else:
-                unfinished = unfinished * ( out_indices[-1] != 3 )
+                unfinished = unfinished * ( out_indices[-1] != eos_index )
             if unfinished.sum() == 0:
                 break
                 
@@ -808,8 +809,14 @@ class NMTModel(nn.Module):
         decoder_outputs = torch.stack(decoder_outputs)
         for k in attns:
             attns[k] = torch.stack(attns[k])              
-    
-#         probs = torch.stack(probs)
+
+        # pad eos if not finished 3 is eos token
+        # remove
+#         if unfinished.sum() != 0:
+#             unfinished = unfinished * ( out_indices[-1] != eos_index )
+#             index = eos_index * unfinished.type_as(index) +  (unfinished == 0).type_as(index) # pad 1
+#             out_indices += [index]    
+    #         probs = torch.stack(probs)
         out_indices = torch.stack(out_indices)
 #         print("model line 770 probx, out_indices", probs.size(), out_indices.size()) # tgt_len * batch size
 #         input("model line:771")
