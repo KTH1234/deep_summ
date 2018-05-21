@@ -698,7 +698,7 @@ class NMTModel(nn.Module):
 
             # Turn any copied words to UNKs
             # 0 is unk
-            if self.decoder.copy_attn:
+            if self.decoder.copy_attn or self._copy:
                 inp = inp.masked_fill(
                     inp.gt(len(batch.dataset.fields['tgt'].vocab) - 1), 0)
 #             inp = inp.unsqueeze(2)             
@@ -711,7 +711,7 @@ class NMTModel(nn.Module):
             # dec_out: beam x rnn_size                    
 
             # (b) Compute a vector of batch x beam word scores.
-            if not self.decoder.copy_attn:
+            if not self.decoder.copy_attn and not self._copy:
                 out = self.generator.forward(dec_out).data
                 out = unbottle(out)
                 # beam x tgt_vocab
