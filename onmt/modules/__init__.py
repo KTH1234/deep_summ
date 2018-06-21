@@ -6,6 +6,7 @@ from onmt.modules.ImageEncoder import ImageEncoder
 from onmt.modules.AudioEncoder import AudioEncoder
 from onmt.modules.CopyGenerator import CopyGenerator, CopyGeneratorLossCompute
 from onmt.modules.RL import RLGeneratorLossCompute
+from onmt.modules.HybridLearning import HybridLossCompute
 from onmt.modules.StructuredAttention import MatrixTree
 from onmt.modules.Transformer import \
    TransformerEncoder, TransformerDecoder, PositionwiseFeedForward

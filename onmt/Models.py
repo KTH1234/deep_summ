@@ -665,7 +665,7 @@ class NMTModel(nn.Module):
             
         self.decoder.init_attn_history() # init attn history in decoder for new attention
         
-        assert self.obj_f == "rl"
+        assert self.obj_f == "rl" or self.obj_f == "hybrid"
         assert batch != None
         def _unbottle(v, batch_size):
             return v.view(-1, batch_size, v.size(1))

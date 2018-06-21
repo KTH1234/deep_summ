@@ -218,6 +218,10 @@ def train_opts(parser):
     group.add_argument('-obj_f', type=str, default="ml", required=True,
                        help="""objective function for deep summarization""")
     
+    # for hybrid learning
+    group.add_argument('-apply_factor', type=float, default="0.9984", required=False,
+                       help="""apply factor for rl in hybrid learning""")
+    
     
     group.add_argument('-data', required=True,
                        help="""Path prefix to the ".train.pt" and

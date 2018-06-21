@@ -200,7 +200,11 @@ class Trainer(object):
             __index = batch.indices.data[0]
 #             print(batch.dataset.examples[__index].src)
 #             input("Trainer line:184")
-            self.train_loss.cur_dataset = cur_dataset
+            if self.model.obj_f == "hybrid":
+                self.train_loss.ml_loss_compute.cur_dataset = cur_dataset
+                self.train_loss.rl_loss_compute.cur_dataset = cur_dataset
+            else:
+                self.train_loss.cur_dataset = cur_dataset
 
             true_batchs.append(batch)
             accum += 1
@@ -327,6 +331,9 @@ class Trainer(object):
 
             dec_state = None
             sec_dec_state = dec_state.clone() if dec_state else None
+            if self.model.obj_f == "hybrid":
+                sample_dec_state = dec_state.clone() if dec_state else None
+                max_sample_dec_state = dec_state.clone() if dec_state else None
             
             src = onmt.io.make_features(batch, 'src', self.data_type)
             if self.data_type == 'text':
@@ -376,13 +383,6 @@ class Trainer(object):
                     # 2. F-prop all but generator.
                     if self.grad_accum_count == 1:
                         self.model.zero_grad()
-                    
-#                     outputs, attns, dec_state, probs, out_indices = \
-#                         self.model.sample(src, tgt, src_lengths, dec_state, batch, "sample")
-                        
-#                     _, _, sec_dec_state, max_probs, max_out_indices = \
-#                         self.model.sample(src, tgt, src_lengths, sec_dec_state, batch, "greedy")
-    
     
                     outputs, attns, dec_state, out_indices = \
                         self.model.sample(src, tgt, src_lengths, dec_state, batch, "sample")
@@ -390,11 +390,7 @@ class Trainer(object):
                    
                     _, _, sec_dec_state, max_out_indices = \
                         self.model.sample(src, tgt, src_lengths, sec_dec_state, batch, "greedy")                        
-
-                     # apply padding info to sampled res
-#                     out_indices = out_indices.mul(batch.tgt.data[1:].gt(3).long()) + batch.tgt.data[1:].mul(batch.tgt.data[1:].le(3).long())
-#                     max_out_indices = max_out_indices.mul(batch.tgt.data[1:].gt(3).long()) + batch.tgt.data[1:].mul(batch.tgt.data[1:].le(3).long())
-                        
+                      
                     batch_scores, sample_scores, max_scores, sample_alignments = self.reward.get_batch_reward(batch, out_indices, max_out_indices)
 #                     print("trainer line:371 batch_scores", batch_scores)
                     batch_scores = batch_scores.expand(out_indices.size(0),batch_scores.size(0))
@@ -479,6 +475,55 @@ class Trainer(object):
                         print("Trainer line:438 outputs", outputs.size())
                         print("Trainer line:439 batch alignment", batch.alignment.size()) 
                         sys.exit(1)
+                elif self.model.obj_f == "hybrid":
+                    # ml
+                    # 2. F-prop all but generator.
+                    if self.grad_accum_count == 1:
+                        self.model.zero_grad()
+                    outputs, attns, dec_state = \
+                        self.model(src, tgt, src_lengths, dec_state, batch)
+
+                    # rl
+                    sample_outputs, sample_attns, sample_dec_state, out_indices = \
+                        self.model.sample(src, tgt, src_lengths, sample_dec_state, batch, "sample")                    
+               
+                    _, _, max_sample_dec_state, max_out_indices = \
+                        self.model.sample(src, tgt, src_lengths, max_sample_dec_state, batch, "greedy")                        
+                      
+                    batch_scores, sample_scores, max_scores, sample_alignments = self.reward.get_batch_reward(batch, out_indices, max_out_indices)
+                    batch_scores = batch_scores.expand(out_indices.size(0),batch_scores.size(0))
+
+                    sample_batch_tgt = batch.tgt.clone()
+                    sample_batch_tgt.data = torch.cat((batch.tgt.data[0].unsqueeze(0), out_indices))
+                    sample_batch_alignment = Variable(sample_alignments.contiguous(), requires_grad=False)
+
+                    # 3. Compute loss in shards for memory efficiency.
+                    try:
+                        batch_stats = self.train_loss.sharded_compute_loss(
+                            batch, outputs, sample_outputs, attns, sample_attns, sample_batch_tgt, sample_batch_alignment, j,
+                            trunc_size, self.shard_size, normalization, rewards=Variable(batch_scores, requires_grad=False).cuda())
+
+                    # 4. Update the parameters and statistics.
+                        if self.grad_accum_count == 1:
+                            self.optim.step()
+                        total_stats.update(batch_stats)
+                        report_stats.update(batch_stats)
+                        
+                       # If truncated, don't backprop fully.
+                        if dec_state is not None:
+                            dec_state.detach()                        
+
+                        # If truncated, don't backprop fully.
+                        if sample_dec_state is not None:
+                            sample_dec_state.detach()
+                        if max_sample_dec_state is not None:
+                            max_sample_dec_state.detach()
+                    except RuntimeError as e:
+                        traceback.print_exc()
+                        print("Trainer line:438 outputs", outputs.size())
+                        print("Trainer line:439 batch alignment", batch.alignment.size()) 
+                        sys.exit(1)
+                    
                     
         if self.grad_accum_count > 1:
             self.optim.step()

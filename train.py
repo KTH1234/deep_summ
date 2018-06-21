@@ -219,6 +219,10 @@ def make_loss_compute(model, tgt_vocab, opt, train=True):
             compute = onmt.modules.RLGeneratorLossCompute(
                 model.generator, tgt_vocab, opt.copy_attn_force,
                 opt.copy_loss_by_seqlength)
+        elif opt.obj_f =="hybrid" and train:
+            compute = onmt.modules.HybridLossCompute(
+                model.generator, tgt_vocab, opt.copy_attn_force,
+                opt.copy_loss_by_seqlength, opt.apply_factor)
         else:
             compute = onmt.modules.CopyGeneratorLossCompute(
                 model.generator, tgt_vocab, opt.copy_attn_force,

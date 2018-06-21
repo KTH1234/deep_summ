@@ -20,6 +20,8 @@ def test_rouge(cand, ref):
             os.mkdir(tmp_dir + "/reference")
         candidates = [line.strip() for line in cand]
         references = [line.strip() for line in ref]
+        print("len(candi) : {}".format(len(candidates)))
+        print("len(ref) : {}".format(len(references)))
         assert len(candidates) == len(references)
         cnt = len(candidates)
         for i in range(cnt):

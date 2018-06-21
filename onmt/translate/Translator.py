@@ -156,6 +156,9 @@ class Translator(object):
         gold_score_total, gold_words_total = 0, 0
 
         all_scores = []
+        # for demo page
+        attns_info = []
+
         for batch in data_iter:
             batch_data = self.translate_batch(batch, data)
             translations = builder.from_batch(batch_data)
@@ -179,6 +182,12 @@ class Translator(object):
                     os.write(1, output.encode('utf-8'))
 
                 # Debug attention.
+#                 print("Translator line:182 attn", trans.attns[0])
+#                 print("Translator line:182 attn sum", torch.sum(trans.attns[0],0).view(1,-1))
+#                 print("Translator line:183 trans.src_raw", len(trans.src_raw))
+                # for demo page
+                attns_info.append( torch.sum(trans.attns[0],0).tolist())          
+#                 input()
                 if attn_debug:
                     srcs = trans.src_raw
                     preds = trans.pred_sents[0]
@@ -196,6 +205,7 @@ class Translator(object):
                         output += row_format.format(word, *row) + '\n'
                         row_format = "{:>10.10} " + "{:>10.7f} " * len(srcs)
                     os.write(1, output.encode('utf-8'))
+#                 input()
             batch = None
 
         if self.report_score:
@@ -211,7 +221,7 @@ class Translator(object):
             import json
             json.dump(self.translator.beam_accum,
                       codecs.open(self.dump_beam, 'w', 'utf-8'))
-        return all_scores
+        return all_scores, attns_info
 
     def translate_batch(self, batch, data):
         """
@@ -343,8 +353,8 @@ class Translator(object):
         # (4) Extract sentences from beam.
         ret = self._from_beam(beam)
         ret["gold_score"] = [0] * batch_size
-        if "tgt" in batch.__dict__:
-            ret["gold_score"] = self._run_target(batch, data)
+#         if "tgt" in batch.__dict__:
+#             ret["gold_score"] = self._run_target(batch, data)
         ret["batch"] = batch
         return ret
 
@@ -383,6 +393,9 @@ class Translator(object):
         #  (i.e. log likelihood) of the target under the model
         tt = torch.cuda if self.cuda else torch
         gold_scores = tt.FloatTensor(batch.batch_size).fill_(0)
+        
+        self.model.decoder.init_attn_history() # init attn history in decoder for new attention        
+        
         dec_out, _, _ = self.model.decoder(
             tgt_in, memory_bank, dec_states, memory_lengths=src_lengths)
 
