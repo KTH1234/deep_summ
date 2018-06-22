@@ -169,7 +169,8 @@ class Reward():
     def get_batch_reward(self, batch, sample_indices, max_indices):
         if self.reward == "rouge":
             return self.get_rouge_reward(batch, sample_indices, max_indices)
-        elif self.reward == "entailment"
+        elif self.reward == "entailment":
+            return get_entailment_reward(batch, sample_indices, max_indices)
         
         
     def get_entailment_score(self, src_tokens, sample_tokens):
