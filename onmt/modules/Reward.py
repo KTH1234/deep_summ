@@ -1,5 +1,7 @@
 # -*- coding: utf-8 -*-
 
+import json
+
 import onmt.io
 import torch
 import torch.cuda
@@ -8,13 +10,17 @@ from torch.autograd import Variable
 from rouge import Rouge 
 
 class Reward():
-    def __init__(self):
-        self.rouge = Rouge(metrics=["rouge-l"], stats=["f"])
+    def __init__(self, reward):
+        self.reward = reward
+        print("Reward : {}".format(reward))
+        if reward == "rouge":
+            self.rouge = Rouge(metrics=["rouge-l"], stats=["f"])
+        elif reward == "entailment":
+            self.entailment = ""
         self.eps = -1e-5
         self.error = 0
         
-    
-    def get_batch_reward(self, batch, sample_indices, max_indices):
+    def get_rouge_reward(self, batch, sample_indices, max_indices):
 #         print("Reward line:5 sample indices", sample_indices) # tgt_len * batch
 #         print("Reward line:5 max indices", max_indices) # tgt_len * batch
 #         print("rweard line:7 sample_indeices[:,0]", sample_indices[:,0])
@@ -85,6 +91,98 @@ class Reward():
         max_scores = torch.Tensor(max_scores).cuda()
         batch_scores = max_scores - sample_scores
         return batch_scores, sample_scores, max_scores, sample_alignments
+    
+    def get_entailment_reward(self, batch, sample_indices, max_indices):
+#         print("Reward line:5 sample indices", sample_indices) # tgt_len * batch
+#         print("Reward line:5 max indices", max_indices) # tgt_len * batch
+#         print("rweard line:7 sample_indeices[:,0]", sample_indices[:,0])
+#         print("rweard line:20 batch", batch)
+#         print("rweard line:21 batch", batch.tgt)
+        
+        tgt_vocab = batch.dataset.fields['tgt'].vocab
+#         print("batch src")
+#         print(batch.src)
+#         input()
+             
+        
+        sample_scores = []
+        max_scores = []
+        alignments = [] # for efficiency, calculate alignments here
+        
+        for i in range(len(batch)):
+            in_batch_index = batch.indices.data[i]
+#             print("Reward line:11 in batch index",in_batch_index)
+#             print("Reward line:29 in raw example", len(batch.dataset.examples))
+#             print("Reward line:30 batch dataset fileds tgt", batch.dataset.fields['tgt'])
+            src_vocab = batch.dataset.src_vocabs[in_batch_index]
+        
+#             raw_tgt = batch.dataset.examples[in_batch_index].tgt
+            raw_src_tokens = self.build_src_tokens(src_vocab, batch.src.data[:,i])
+#             print("reward line:36 raw_tgt", raw_tgt)
+#             print("reward line:37 raw_tokens", raw_tokens)
+            sample_tokens = self.build_target_tokens(src_vocab, tgt_vocab, sample_indices[:,i])
+            max_tokens = self.build_target_tokens(src_vocab, tgt_vocab, max_indices[:,i])
+#             print("reward line:16 sample tokens",sample_tokens)
+            sample_rouge_f1_s = self.get_entailment_score(raw_src_tokens, sample_tokens)
+            max_rouge_f1_s = self.get_entailment_score(raw_src_tokens, max_tokens)
+            
+            # calculate alginemts
+            mask = [0] + [src_vocab.stoi[w] for w in sample_tokens]
+            alignments.append(mask)
+            
+#             print("reward line:37 sample_tokens", sample_tokens)
+#             print("reward line:37 max_tokens", max_tokens)
+        
+            sample_scores.append(sample_rouge_f1_s['rouge-l']['f'])
+            max_scores.append(max_rouge_f1_s['rouge-l']['f'])
+            
+            if torch.rand(1)[0] <= 0.005:
+#                 src_tokens = self.build_target_tokens(src_vocab, batch.dataset.fields['src'].vocab, batch.src[0].data[:,i])
+                src_tokens = raw_src_tokens
+                print("in batch index = {}".format(in_batch_index))
+                print("\t src tokes")
+                print("\t\t", src_tokens)
+                print("\t target tokens")
+                print("\t\t", raw_tokens)
+                print("\tsampled tokens")
+                print("\t\t", sample_scores[-1], sample_tokens)
+                print("\t max tokens")
+                print("\t\t", max_scores[-1], max_tokens)            
+#         print("Rewards line:72 alignments", alignments )
+        
+        max_sample_len = max(len(x) for x in alignments)
+        max_sample_len = max(sample_indices.size(0)+1, max_sample_len)
+#         print("Reward line:75 sample_indices", sample_indices.size())        
+#         print("Reward line:76 max", max(len(x) for x in alignments))
+        for i in range(len(alignments)):
+            alignments[i] += [0] * max(0, max_sample_len - len(alignments[i]))
+            alignments[i] = torch.LongTensor(alignments[i]).cuda()
+#         print("Rewards line:77 alignments", alignments )            
+        sample_alignments = torch.stack(alignments).transpose(0,1)
+#             print("reward line:29 rouge", sample_rouge_f1_s, max_rouge_f1_s)
+        sample_scores = torch.Tensor(sample_scores).cuda()
+        max_scores = torch.Tensor(max_scores).cuda()
+        batch_scores = max_scores - sample_scores
+        return batch_scores, sample_scores, max_scores, sample_alignments        
+                       
+    
+    def get_batch_reward(self, batch, sample_indices, max_indices):
+        if self.reward == "rouge":
+            return self.get_rouge_reward(batch, sample_indices, max_indices)
+        elif self.reward == "entailment"
+        
+        
+    def get_entailment_score(self, src_tokens, sample_tokens):
+        premise = " ".join(src_tokens)
+        hypothesis = " ".join(sample_tokens)
+        
+        json_data = {"premise":premise, "hypothesis":hypothesis}
+        json_data = josn.dumps(json_data, ensure_ascill=False)
+        
+        score = self.entailment(json_data)
+        
+        return score
+        
                
 
             
@@ -96,6 +194,18 @@ class Reward():
         return score[0]
         
         
+    def build_src_tokens(self, src_vocab, indices):
+        tokens = []
+#         print("reward line:18 onmt.io.EOS_WORD", onmt.io.EOS_WORD)
+        for tok in indices:
+            try:
+                tokens.append(src_vocab.itos[tok - len(tgt_vocab)])                
+            except IndexError:
+                self.error += 1
+                print("Reward line 82: Error index occured {}".format(self.error))
+                tokens.append('<unk>')
+        return tokens     
+    
 
     def build_target_tokens(self, src_vocab, tgt_vocab, pred):
         tokens = []

@@ -138,7 +138,7 @@ class Trainer(object):
         self.grad_accum_count = grad_accum_count
         self.progress_step = 0
         self.opt = opt
-        self.reward = onmt.modules.Reward() #for reward
+        self.reward = onmt.modules.Reward(opt.reward) #for reward
 
         assert(grad_accum_count > 0)
         if grad_accum_count > 1:
