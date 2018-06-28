@@ -219,7 +219,7 @@ def train_opts(parser):
                        help="""objective function for deep summarization""")
     
     group.add_argument('-reward', default='rouge',
-                       choices=['rouge', 'entailment'],
+                       choices=['rouge', 'entailment_src_hyp_sample', 'entailment_src_hyp_gold', 'entailment_tgt_hyp'],
                        help="""Reward for RL or hybrid learning""")    
     
     # for hybrid learning

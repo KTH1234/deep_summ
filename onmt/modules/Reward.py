@@ -2,6 +2,7 @@
 
 import json
 
+import onmt
 import onmt.io
 import torch
 import torch.cuda
@@ -15,8 +16,10 @@ class Reward():
         print("Reward : {}".format(reward))
         if reward == "rouge":
             self.rouge = Rouge(metrics=["rouge-l"], stats=["f"])
-        elif reward == "entailment":
-            self.entailment = ""
+        elif "entailment" in reward:
+#            entail_model_path = "0617_entail_400k_model.tar.gz" # kor entail index:1
+            entail_model_path = "allennlp_eng_model.tar.gz" # eng entail index:0, cotra, neu:1,2
+            self.entailment = onmt.modules.Entailment_scorer(entail_model_path, 0) # model  path and index of entailment
         self.eps = -1e-5
         self.error = 0
         
@@ -92,7 +95,7 @@ class Reward():
         batch_scores = max_scores - sample_scores
         return batch_scores, sample_scores, max_scores, sample_alignments
     
-    def get_entailment_reward(self, batch, sample_indices, max_indices):
+    def get_entailment_reward(self, batch, sample_indices, max_indices, entail_type):
 #         print("Reward line:5 sample indices", sample_indices) # tgt_len * batch
 #         print("Reward line:5 max indices", max_indices) # tgt_len * batch
 #         print("rweard line:7 sample_indeices[:,0]", sample_indices[:,0])
@@ -100,6 +103,7 @@ class Reward():
 #         print("rweard line:21 batch", batch.tgt)
         
         tgt_vocab = batch.dataset.fields['tgt'].vocab
+        src_vocab = batch.dataset.fields['src'].vocab
 #         print("batch src")
 #         print(batch.src)
 #         input()
@@ -114,27 +118,44 @@ class Reward():
 #             print("Reward line:11 in batch index",in_batch_index)
 #             print("Reward line:29 in raw example", len(batch.dataset.examples))
 #             print("Reward line:30 batch dataset fileds tgt", batch.dataset.fields['tgt'])
-            src_vocab = batch.dataset.src_vocabs[in_batch_index]
+#            src_vocab = batch.dataset.src_vocabs[in_batch_index]
         
 #             raw_tgt = batch.dataset.examples[in_batch_index].tgt
-            raw_src_tokens = self.build_src_tokens(src_vocab, batch.src.data[:,i])
+            raw_src_tokens = self.build_src_tokens(src_vocab, batch.src[0].data[:,i])
 #             print("reward line:36 raw_tgt", raw_tgt)
 #             print("reward line:37 raw_tokens", raw_tokens)
             sample_tokens = self.build_target_tokens(src_vocab, tgt_vocab, sample_indices[:,i])
             max_tokens = self.build_target_tokens(src_vocab, tgt_vocab, max_indices[:,i])
 #             print("reward line:16 sample tokens",sample_tokens)
-            sample_rouge_f1_s = self.get_entailment_score(raw_src_tokens, sample_tokens)
-            max_rouge_f1_s = self.get_entailment_score(raw_src_tokens, max_tokens)
+#            sample_entail_s = self.get_entailment_score(raw_src_tokens, sample_tokens)
+#            max_entail_s = self.get_entailment_score(raw_src_tokens, max_tokens)
             
-            # calculate alginemts
-            mask = [0] + [src_vocab.stoi[w] for w in sample_tokens]
+            # calculate alginemt
+            instance_src_vocab = batch.dataset.src_vocabs[in_batch_index]
+            raw_tokens = self.build_target_tokens(instance_src_vocab, tgt_vocab, batch.tgt.data[1:,i])
+
+            if entail_type == "entailment_src_hyp_sample":
+              hyp_tokens = raw_src_tokens
+            elif entail_type == "entailment_src_hyp_gold":
+              hyp_tokens = raw_src_tokens
+              max_tokens = raw_tokens
+            elif entail_type == "entailment_tgt_hyp":
+              hyp_tokens = raw_tokens
+            else:
+              input("Parameter Error!")             
+
+            sample_entail_s = self.get_entailment_score(hyp_tokens, sample_tokens, True)
+            max_entail_s = self.get_entailment_score(hyp_tokens, max_tokens, True) # use gold target to baseline
+
+
+            mask = [0] + [instance_src_vocab.stoi[w] for w in sample_tokens]
             alignments.append(mask)
             
-#             print("reward line:37 sample_tokens", sample_tokens)
-#             print("reward line:37 max_tokens", max_tokens)
+#            print("reward line:37 sample_tokens", sample_entail_s, sample_tokens)
+#            print("reward line:37 max_tokens", max_entail_s, max_tokens)
         
-            sample_scores.append(sample_rouge_f1_s['rouge-l']['f'])
-            max_scores.append(max_rouge_f1_s['rouge-l']['f'])
+            sample_scores.append(sample_entail_s)
+            max_scores.append(max_entail_s)
             
             if torch.rand(1)[0] <= 0.005:
 #                 src_tokens = self.build_target_tokens(src_vocab, batch.dataset.fields['src'].vocab, batch.src[0].data[:,i])
@@ -169,18 +190,22 @@ class Reward():
     def get_batch_reward(self, batch, sample_indices, max_indices):
         if self.reward == "rouge":
             return self.get_rouge_reward(batch, sample_indices, max_indices)
-        elif self.reward == "entailment":
-            return get_entailment_reward(batch, sample_indices, max_indices)
+        elif "entailment" in self.reward:
+            return self.get_entailment_reward(batch, sample_indices, max_indices, self.reward)
         
         
-    def get_entailment_score(self, src_tokens, sample_tokens):
+    def get_entailment_score(self, src_tokens, sample_tokens, length_penalty=False):
         premise = " ".join(src_tokens)
         hypothesis = " ".join(sample_tokens)
         
         json_data = {"premise":premise, "hypothesis":hypothesis}
-        json_data = josn.dumps(json_data, ensure_ascill=False)
+#        json_data = json.dumps(json_data, ensure_ascii=False)
+#        print(json_data)
         
-        score = self.entailment(json_data)
+        score = self.entailment.predict_entailment(json_data)
+        if length_penalty:
+          penalty = len(sample_tokens) / len(src_tokens) 
+          score = penalty * score
         
         return score
         
@@ -200,7 +225,7 @@ class Reward():
 #         print("reward line:18 onmt.io.EOS_WORD", onmt.io.EOS_WORD)
         for tok in indices:
             try:
-                tokens.append(src_vocab.itos[tok - len(tgt_vocab)])                
+                tokens.append(src_vocab.itos[tok])                
             except IndexError:
                 self.error += 1
                 print("Reward line 82: Error index occured {}".format(self.error))

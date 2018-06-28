@@ -15,6 +15,7 @@ class HybridLossCompute(onmt.Loss.LossComputeBase):
     """
     Copy Generator Loss Computation.
     """
+    # apply_factor = 0.9984 # deep summ
     def __init__(self, generator, tgt_vocab,
                  force_copy, normalize_by_length,
                   apply_factor = 0.9984, eps=1e-20):
