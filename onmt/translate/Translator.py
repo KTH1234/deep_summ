@@ -37,7 +37,7 @@ def make_translator(opt, report_score=True, out_file=None):
               for k in ["beam_size", "n_best", "max_length", "min_length",
                         "stepwise_penalty", "block_ngram_repeat",
                         "ignore_when_blocking", "dump_beam",
-                        "data_type", "replace_unk", "gpu", "verbose"]}
+                        "data_type", "replace_unk", "gpu", "verbose", "idf_attn_weight"]}
 
     translator = Translator(model, fields, global_scorer=scorer,
                             out_file=out_file, report_score=report_score,
@@ -89,7 +89,10 @@ class Translator(object):
                  report_bleu=False,
                  report_rouge=False,
                  verbose=False,
-                 out_file=None):
+                 out_file=None,
+                 idf_attn_weight=False
+                 
+                ):
         self.gpu = gpu
         self.cuda = gpu > -1
 
@@ -117,6 +120,32 @@ class Translator(object):
         self.report_score = report_score
         self.report_bleu = report_bleu
         self.report_rouge = report_rouge
+        self.idf_attn_weight = idf_attn_weight
+        
+        # hardcoded to load idf value
+        if self.idf_attn_weight:
+            print("Translator line:127 Load idf value by file and revise num is 1, hard coded")
+            idf_file_path = "idf_info.txt"
+            
+            
+            src_vocab = self.fields["src"].vocab
+            self.idf_attn_weight_list = [1] * len(src_vocab)
+            
+            with open(idf_file_path, 'r', encoding="utf-8") as idf_file:
+                for line in idf_file:
+                    word, freq, weight = line.strip().split('\t')
+                    idx = src_vocab.stoi[word]
+                    weight = float(weight)
+                    if weight > 1 and freq != '0':
+                        self.idf_attn_weight_list[idx] = weight
+            if self.cuda:
+                self.idf_attn_weights = torch.Tensor(self.idf_attn_weight_list).cuda()
+            else:
+                self.idf_attn_weights = torch.Tensor(self.idf_attn_weight_list).cuda()
+#             print("Translator line:127 Complete load idf weights from file,len :  {} hard coded".format(len(self.idf_attn_weight_list)))
+#             print("Translator line:142 idf tensor :  ", self.idf_attn_weights)
+                
+            
 
         # for debugging
         self.beam_trace = self.dump_beam != ""
@@ -158,8 +187,32 @@ class Translator(object):
         all_scores = []
         # for demo page
         attns_info = []
+        oov_info = []
+        copy_info = []
 
         for batch in data_iter:
+            def check_oov(batch, vocab):
+#                 print("Translator line:163 len batch", len(batch))
+#                 print("Translator line:163 unk index", vocab.stoi["<unk>"]) # 0
+#                 print("Translator line:163 2 token", vocab.itos[2])
+                unk_index = vocab.stoi["<unk>"]
+                batch_oov_indices = []
+                
+                for i in range(len(batch)):
+                    length = batch.src[1][i]
+                    oov_indices = [ 1 if idx == unk_index else 0 for idx in batch.src[0].data[:,i][:length]]
+                    batch_oov_indices.append(oov_indices)
+                
+                return batch_oov_indices
+                    
+#                     print("Translator line:173 batch src", batch.src[0].data[:,i])
+#                     print("Translator line:173 batch src", batch.src[1][i])
+#                     print("Translator line:173 oov indices", oov_indices)
+#                     print("Translator line:173 oov indices len", len(oov_indices))
+#                     input()
+            if len(batch) == 1: # assume demo page
+                oov_info = check_oov(batch, self.fields["src"].vocab)
+
             batch_data = self.translate_batch(batch, data)
             translations = builder.from_batch(batch_data)
 
@@ -182,12 +235,20 @@ class Translator(object):
                     os.write(1, output.encode('utf-8'))
 
                 # Debug attention.
-#                 print("Translator line:182 attn", trans.attns[0])
-#                 print("Translator line:182 attn sum", torch.sum(trans.attns[0],0).view(1,-1))
+                #print("Translator line:182 attn", trans.attns[0])
+                #print("Translator line:182 attn sum", torch.sum(trans.attns[0],0).view(1,-1))
+#                 print("Translator line:182 copy", trans.copys[0]) # batch size * 1
 #                 print("Translator line:183 trans.src_raw", len(trans.src_raw))
+
                 # for demo page
-                attns_info.append( torch.sum(trans.attns[0],0).tolist())          
-#                 input()
+                attns_info.append( torch.sum(trans.attns[0],0).tolist())
+                if trans.copys is not None:                    
+                    copy_info.append(trans.copys[0][0].squeeze(1).tolist())
+#                 print(copy_info)
+#                 print("Translator line:183 pred_sents[0]", trans.pred_sents[0])  
+#                 print("Translator line:183 pred_sents[0] len", len(trans.pred_sents[0]))                    
+                
+#                 input("Translator line:213 stop")
                 if attn_debug:
                     srcs = trans.src_raw
                     preds = trans.pred_sents[0]
@@ -221,7 +282,7 @@ class Translator(object):
             import json
             json.dump(self.translator.beam_accum,
                       codecs.open(self.dump_beam, 'w', 'utf-8'))
-        return all_scores, attns_info
+        return all_scores, attns_info, oov_info, copy_info
 
     def translate_batch(self, batch, data):
         """
@@ -282,6 +343,22 @@ class Translator(object):
         enc_states, memory_bank = self.model.encoder(src, src_lengths)
         dec_states = self.model.decoder.init_decoder_state(
             src, memory_bank, enc_states)
+        
+#         print("Translator line:338 src", src) # src_len * batch * 1
+#         print("Translator line:339 memory_bank", memory_bank) # src len * batch * hidden
+        idf_size = self.idf_attn_weights.size(0)
+#         print("Translator line:346 expand idf", self.idf_attn_weights.unsqueeze(0).repeat(src.size(0), 1).contiguous()) # src_len * idf size
+#         print("Translator line:346 expand src squeeze -1", src.data.squeeze(-1)) # src_len * src_vocab size
+
+#         print("Translator line:346 expand ooi", sum(src.data > idf_size)) # src_len * idf size       
+#         print("Translator line:346 expand ooi", sum(src.data > idf_size+1)) # src_len * idf size       
+        idf_attn_weights = torch.gather(self.idf_attn_weights.unsqueeze(0).repeat(src.size(0), 1).contiguous(), 1, src.data.squeeze(-1).contiguous())
+#         print("Translator line:339 idf attn weights", idf_attn_weights)
+#         idf_attn_weights = rvar(idf_attn_weights)
+        idf_attn_weights = idf_attn_weights.repeat(1, beam_size)
+#         print("Translator line:339 idf attn weights", idf_attn_weights)
+#         print("Translator line:339 idf", memory_bank)
+        
 
         if src_lengths is None:
             src_lengths = torch.Tensor(batch_size).type_as(memory_bank.data)\
@@ -294,6 +371,12 @@ class Translator(object):
         memory_bank = rvar(memory_bank.data)
         memory_lengths = src_lengths.repeat(beam_size)
         dec_states.repeat_beam_size_times(beam_size)        
+        
+#         print("Translator line:338 src", src)
+#         print("Translator line:355 memory_length", memory_lengths)
+#         print("Translator line:355 src_lengths", src_lengths)
+#         print("Translator line:355 memory_bank", memory_bank)
+#         input()        
         
         self.model.decoder.init_attn_history() # init attn history in decoder for new attention
 
@@ -323,9 +406,11 @@ class Translator(object):
 
             # Run one step.
             dec_out, dec_states, attn = self.model.decoder(
-                inp, memory_bank, dec_states, memory_lengths=memory_lengths)
+                inp, memory_bank, dec_states, memory_lengths=memory_lengths, idf_weights=idf_attn_weights)
             dec_out = dec_out.squeeze(0)
             # dec_out: beam x rnn_size
+            
+            
 
             # (b) Compute a vector of batch x beam word scores.
             if not self.copy_attn:
@@ -334,9 +419,10 @@ class Translator(object):
                 # beam x tgt_vocab
                 beam_attn = unbottle(attn["std"])
             else:
-                out = self.model.generator.forward(dec_out,
+                # assume demo page
+                out, p_copy = self.model.generator.forward(dec_out,
                                                    attn["copy"].squeeze(0),
-                                                   src_map)
+                                                   src_map, require_copy_p=True)
                 # beam x (tgt_vocab + extra_vocab)
                 out = data.collapse_copy_scores(
                     unbottle(out.data),
@@ -344,11 +430,24 @@ class Translator(object):
                 # beam x tgt_vocab
                 out = out.log()
                 beam_attn = unbottle(attn["copy"])
+                beam_copy = unbottle(p_copy)
             # (c) Advance each beam.
+#             print("Translator line:353 attn", beam_attn) # 
+#             print("Translator line:353 attn copy", attn["copy"])
+#             print("Translator line:353 p_copy", p_copy) # baem*batch
+#             print("Translator line:353 unbottle p_copy", unbottle(p_copy)) # beam, batch, 1
+#             print("Translator line:353 out", out)
+#             input()
             for j, b in enumerate(beam):
-                b.advance(out[:, j],
-                          beam_attn.data[:, j, :memory_lengths[j]])
-                dec_states.beam_update(j, b.get_current_origin(), beam_size)
+                if not self.copy_attn:
+                        b.advance(out[:, j],
+                                  beam_attn.data[:, j, :memory_lengths[j]])
+                        dec_states.beam_update(j, b.get_current_origin(), beam_size)
+                else:
+                        b.advance(out[:, j],
+                                  beam_attn.data[:, j, :memory_lengths[j]], copy_out=beam_copy.data[:,j,:])
+                        dec_states.beam_update(j, b.get_current_origin(), beam_size)                    
+
 
         # (4) Extract sentences from beam.
         ret = self._from_beam(beam)
@@ -361,18 +460,27 @@ class Translator(object):
     def _from_beam(self, beam):
         ret = {"predictions": [],
                "scores": [],
-               "attention": []}
+               "attention": [],
+              "copy":[]}
         for b in beam:
             n_best = self.n_best
             scores, ks = b.sort_finished(minimum=n_best)
-            hyps, attn = [], []
+            hyps, attn, copy = [], [], []
             for i, (times, k) in enumerate(ks[:n_best]):
-                hyp, att = b.get_hyp(times, k)
+                if len(b.copy_p) != 0:
+                    hyp, att, copy_p = b.get_hyp(times, k)
+                    copy.append(copy_p)
+                else:
+                    hyp, att = b.get_hyp(times, k)
                 hyps.append(hyp)
                 attn.append(att)
             ret["predictions"].append(hyps)
             ret["scores"].append(scores)
             ret["attention"].append(attn)
+            if len(copy) != 0:
+                ret["copy"].append(copy)  
+        if len(copy) == 0:
+            ret.pop("copy")
         return ret
 
     def _run_target(self, batch, data):

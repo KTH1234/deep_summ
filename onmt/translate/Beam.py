@@ -45,6 +45,9 @@ class Beam(object):
 
         # The attentions (matrix) for each time.
         self.attn = []
+        
+        # Copy probability for each time
+        self.copy_p = []
 
         # Time and k pair for finished.
         self.finished = []
@@ -70,7 +73,7 @@ class Beam(object):
         "Get the backpointers for the current timestep."
         return self.prev_ks[-1]
 
-    def advance(self, word_probs, attn_out):
+    def advance(self, word_probs, attn_out, copy_out = None):
         """
         Given prob over words for every last beam `wordLk` and attention
         `attn_out`: Compute and update the beam search.
@@ -104,7 +107,10 @@ class Beam(object):
                 ngrams = []
                 le = len(self.next_ys)
                 for j in range(self.next_ys[-1].size(0)):
-                    hyp, _ = self.get_hyp(le-1, j)
+                    if len(self.copy_p) != 0:
+                        hyp, _, _ = self.get_hyp(le-1, j)
+                    else:
+                        hyp, _ = self.get_hyp(le-1, j)
                     ngrams = set()
                     fail = False
                     gram = []
@@ -134,6 +140,8 @@ class Beam(object):
         self.prev_ks.append(prev_k)
         self.next_ys.append((best_scores_id - prev_k * num_words))
         self.attn.append(attn_out.index_select(0, prev_k))
+        if copy_out is not None:
+            self.copy_p.append(copy_out.index_select(0, prev_k))
         self.global_scorer.update_global_state(self)
 
         for i in range(self.next_ys[-1].size(0)):
@@ -169,11 +177,15 @@ class Beam(object):
         """
         Walk back to construct the full hypothesis.
         """
-        hyp, attn = [], []
+        hyp, attn, copy_p = [], [], []
         for j in range(len(self.prev_ks[:timestep]) - 1, -1, -1):
             hyp.append(self.next_ys[j+1][k])
             attn.append(self.attn[j][k])
+            if len(self.copy_p) != 0:
+                copy_p.append(self.copy_p[j][k])
             k = self.prev_ks[j][k]
+        if len(self.copy_p) != 0:
+            return hyp[::-1], torch.stack(attn[::-1]), torch.stack(copy_p[::-1])
         return hyp[::-1], torch.stack(attn[::-1])
 
 

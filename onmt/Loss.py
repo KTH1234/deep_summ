@@ -126,14 +126,14 @@ class LossComputeBase(nn.Module):
         shard_state = self._make_shard_state(batch, output, range_, attns)
 
         for shard in shards(shard_state, shard_size):
-            print("Loss, line:123", shard)
+#             print("Loss, line:123", shard)
 
             loss, stats = self._compute_loss(batch, **shard)
             if backward:
                 loss.div(normalization).backward()
             batch_stats.update(stats)
 
-        input()            
+#         input()            
         return batch_stats
 
     def _stats(self, loss, scores, target, reward=None):
@@ -165,7 +165,7 @@ class NMTLossCompute(LossComputeBase):
     Standard NMT Loss Computation.
     """
     def __init__(self, generator, tgt_vocab, normalization="sents",
-                 label_smoothing=0.0):
+                 label_smoothing=0.0, initial_weight=None):
         super(NMTLossCompute, self).__init__(generator, tgt_vocab)
         assert (label_smoothing >= 0.0 and label_smoothing <= 1.0)
         if label_smoothing > 0:
@@ -181,7 +181,11 @@ class NMTLossCompute(LossComputeBase):
             one_hot[0][self.padding_idx] = 0
             self.register_buffer('one_hot', one_hot)
         else:
-            weight = torch.ones(len(tgt_vocab))
+            if initial_weight is not None:
+                weight = torch.Tensor(initial_weight)
+                print("Loss line:186 Initialize weights with parameter {}".format(weight.size()))
+            else:
+                weight = torch.ones(len(tgt_vocab))
             weight[self.padding_idx] = 0
             self.criterion = nn.NLLLoss(weight, size_average=False)
         self.confidence = 1.0 - label_smoothing

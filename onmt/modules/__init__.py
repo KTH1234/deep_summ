@@ -16,6 +16,7 @@ from onmt.modules.StackedRNN import StackedLSTM, StackedGRU
 from onmt.modules.Embeddings import Embeddings, PositionalEncoding
 from onmt.modules.WeightNorm import WeightNormConv2d
 from onmt.modules.Reward import Reward
+from onmt.modules.Idf import Idf
 
 
 from onmt.Models import EncoderBase, MeanEncoder, StdRNNDecoder, \

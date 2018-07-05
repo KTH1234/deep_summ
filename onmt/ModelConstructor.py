@@ -191,6 +191,41 @@ def make_base_model(model_opt, fields, gpu, checkpoint=None):
     model.obj_f = model_opt.obj_f
     print("ModelConstructor line:191, model.obj_f")
     print(model.obj_f)
+    
+    print("ModelConstructor line:195, tgt vocab len", len(fields["tgt"].vocab))
+    print("ModelConstructor line:196, tgt vocab freq len", len(fields["tgt"].vocab.freqs))
+    
+    # get idf value
+#     words = [ fields["tgt"].vocab.itos[i] for i in range(len(fields["tgt"].vocab)) ]
+#     def get_df(src_file_path, words):
+#         words_df = [0] * len(words)
+#         with open(src_file_path, 'r', encoding="utf-8") as src_file:
+#             import collections
+            
+#             cnt = 0
+#             for line in src_file:
+#                 cnt += 1
+#                 src_words = line.split()
+#                 src_words_dict = { word:1 for word in src_words }
+#                 for i in range(len(words)):
+#                     if words[i] in src_words_dict:
+#                         words_df[i] += 1
+#         return words_df, cnt
+    
+#     words_df, cnt = get_df("article_data/article_src_train_src_500_tar_50.txt", words)
+#     print("Modelconstructor line:216 complete get df information")
+    
+#     for i in range(len(fields["tgt"].vocab)):
+#         from math import log
+#         word = words[i]
+#         if words_df[i] == 0:
+#             words_df[i] = 1
+# #         word_freq = fields["src"].vocab.freqs[word] if fields["src"].vocab.freqs[word] > 0 else 1
+#         print("{}.{} : {}/{}  ".format(i, word, words_df[i], round(log(cnt/words_df[i]),2)), end='|| ')
+#         if i % 10 == 0:
+#             print()
+    
+#     input("ModelConstructor line:191 stop")
 
     # Make Generator.
     if not model_opt.copy_attn:

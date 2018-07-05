@@ -213,6 +213,13 @@ def train_opts(parser):
 
     group = parser.add_argument_group('General')
     
+    # for idf weight
+    group.add_argument('-idf_revision_num', type=int, default=0,
+                       help="""idf revision number""")    
+    
+    group.add_argument('-idf_class_weights', action="store_true",
+                       help="""give idf class weights to loss function must with obj_f ml""")
+    
     # add for deep summarization
     # ml, rl, hybrid
     group.add_argument('-obj_f', type=str, default="ml", required=True,
@@ -391,6 +398,9 @@ def train_opts(parser):
 
 def translate_opts(parser):
     group = parser.add_argument_group('Model')
+    group.add_argument('-idf_attn_weight', action="store_true",
+                       help='multiply idf value to attn weight')    
+    
     group.add_argument('-model', required=True,
                        help='Path to model .pt file')
 

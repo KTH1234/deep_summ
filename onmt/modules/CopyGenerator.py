@@ -64,7 +64,7 @@ class CopyGenerator(nn.Module):
         self.linear_copy = nn.Linear(input_size, 1)
         self.tgt_dict = tgt_dict
 
-    def forward(self, hidden, attn, src_map):
+    def forward(self, hidden, attn, src_map, require_copy_p=False):
         """
         Compute a distribution over the target dictionary
         extended by the dynamic dictionary implied by compying
@@ -93,6 +93,8 @@ class CopyGenerator(nn.Module):
 
         # Probability of copying p(z=1) batch.
         p_copy = F.sigmoid(self.linear_copy(hidden))
+#         print("Copygenerator line:96 p_copy", p_copy) # batch*len
+        
         # Probibility of not copying: p_{word}(w) * (1 - p(z))
         out_prob = torch.mul(prob,  1 - p_copy.expand_as(prob))
         mul_attn = torch.mul(attn, p_copy.expand_as(attn))
@@ -100,6 +102,8 @@ class CopyGenerator(nn.Module):
                               .transpose(0, 1),
                               src_map.transpose(0, 1)).transpose(0, 1)
         copy_prob = copy_prob.contiguous().view(-1, cvocab)
+        if require_copy_p:
+            return torch.cat([out_prob, copy_prob], 1), p_copy
         return torch.cat([out_prob, copy_prob], 1)
 
 

@@ -51,13 +51,24 @@ class TranslationBuilder(object):
                len(translation_batch["predictions"]))
         batch_size = batch.batch_size
 
-        preds, pred_score, attn, gold_score, indices = list(zip(
-            *sorted(zip(translation_batch["predictions"],
+        if "copy" in translation_batch:
+            preds, pred_score, attn, copy, gold_score, indices = list(zip(
+                *sorted(zip(translation_batch["predictions"],
+                        translation_batch["scores"],
+                        translation_batch["attention"],
+                        translation_batch["copy"],
+                        translation_batch["gold_score"],
+                        batch.indices.data),
+                    key=lambda x: x[-1])))
+        else:
+            preds, pred_score, attn, gold_score, indices = list(zip(
+                *sorted(zip(translation_batch["predictions"],
                         translation_batch["scores"],
                         translation_batch["attention"],
                         translation_batch["gold_score"],
                         batch.indices.data),
-                    key=lambda x: x[-1])))
+                    key=lambda x: x[-1])))       
+            copy = []
 
         # Sorting
         inds, perm = torch.sort(batch.indices.data)
@@ -96,7 +107,7 @@ class TranslationBuilder(object):
             translation = Translation(src[:, b] if src is not None else None,
                                       src_raw, pred_sents,
                                       attn[b], pred_score[b], gold_sent,
-                                      gold_score[b])
+                                      gold_score[b], copy=copy if len(copy) != 0 else None)
             translations.append(translation)
 
         return translations
@@ -118,11 +129,12 @@ class Translation(object):
 
     """
     def __init__(self, src, src_raw, pred_sents,
-                 attn, pred_scores, tgt_sent, gold_score):
+                 attn, pred_scores, tgt_sent, gold_score, copy=None):
         self.src = src
         self.src_raw = src_raw
         self.pred_sents = pred_sents
         self.attns = attn
+        self.copys = copy
         self.pred_scores = pred_scores
         self.gold_sent = tgt_sent
         self.gold_score = gold_score

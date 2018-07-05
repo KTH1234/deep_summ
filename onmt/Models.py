@@ -282,7 +282,7 @@ class RNNDecoderBase(nn.Module):
             self._copy = True
         self._reuse_copy_attn = reuse_copy_attn
 
-    def forward(self, tgt, memory_bank, state, memory_lengths=None):
+    def forward(self, tgt, memory_bank, state, memory_lengths=None, idf_weights=None):
         """
         Args:
             tgt (`LongTensor`): sequences of padded tokens
@@ -293,6 +293,9 @@ class RNNDecoderBase(nn.Module):
                  decoder state object to initialize the decoder
             memory_lengths (`LongTensor`): the padded source lengths
                 `[batch]`.
+            # 18.07.05 by thkim
+            idf_weights : idf values, multiply it to attn weight
+            
         Returns:
             (`FloatTensor`,:obj:`onmt.Models.DecoderState`,`FloatTensor`):
                 * decoder_outputs: output from the decoder (after attn)
@@ -310,7 +313,7 @@ class RNNDecoderBase(nn.Module):
 
         # Run the forward pass of the RNN.
         decoder_final, decoder_outputs, attns = self._run_forward_pass(
-            tgt, memory_bank, state, memory_lengths=memory_lengths)
+            tgt, memory_bank, state, memory_lengths=memory_lengths, idf_weights=idf_weights)
 
         # Update the state with the result.
         final_output = decoder_outputs[-1]
@@ -361,7 +364,7 @@ class StdRNNDecoder(RNNDecoderBase):
     Implemented without input_feeding and currently with no `coverage_attn`
     or `copy_attn` support.
     """
-    def _run_forward_pass(self, tgt, memory_bank, state, memory_lengths=None):
+    def _run_forward_pass(self, tgt, memory_bank, state, memory_lengths=None, idf_weights=None):
         """
         Private helper for running the specific RNN forward pass.
         Must be overriden by all subclasses.
@@ -461,7 +464,7 @@ class InputFeedRNNDecoder(RNNDecoderBase):
           G --> H
     """
 
-    def _run_forward_pass(self, tgt, memory_bank, state, memory_lengths=None):
+    def _run_forward_pass(self, tgt, memory_bank, state, memory_lengths=None, idf_weights=None):
         """
         See StdRNNDecoder._run_forward_pass() for description
         of arguments and return values.
@@ -510,7 +513,9 @@ class InputFeedRNNDecoder(RNNDecoderBase):
                 rnn_output,
                 memory_bank.transpose(0, 1),
                 memory_lengths=memory_lengths,
-                emb_weight=self.embeddings.word_lut.weight) # for sharing decoder weight
+                emb_weight=self.embeddings.word_lut.weight,
+                idf_weights = idf_weights
+            ) # for sharing decoder weight
 #             print("model line 513 after attn")
             if self.context_gate is not None:
                 # TODO: context gate should be employed

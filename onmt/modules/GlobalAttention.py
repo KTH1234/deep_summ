@@ -153,7 +153,7 @@ class GlobalAttention(nn.Module):
 
             return self.v(wquh.view(-1, dim)).view(tgt_batch, tgt_len, src_len)
 
-    def forward(self, input, memory_bank, memory_lengths=None, coverage=None, emb_weight=None):
+    def forward(self, input, memory_bank, memory_lengths=None, coverage=None, emb_weight=None, idf_weights=None):
         """
 
         Args:
@@ -161,6 +161,10 @@ class GlobalAttention(nn.Module):
           memory_bank (`FloatTensor`): source vectors `[batch x src_len x dim]`
           memory_lengths (`LongTensor`): the source context lengths `[batch]`
           coverage (`FloatTensor`): None (not supported yet)
+          
+          # thkim
+          emb_weight : maybe intra attention related ...
+          idf_weights : idf values, multiply it to attn weight
 
         Returns:
           (`FloatTensor`, `FloatTensor`):
@@ -231,6 +235,13 @@ class GlobalAttention(nn.Module):
         ## 기존 attention
 #         align_vectors = self.sm(align.view(batch*targetL, sourceL))
 #         align_vectors = align_vectors.view(batch, targetL, sourceL)
+
+
+#         print("global attn line:270 idf_weights", torch.autograd.Variable(idf_weights.t().unsqueeze(1), requires_grad=False))
+#         print("global attn line:270", align_vectors)
+        if idf_weights is not None:
+            align_vectors = align_vectors * torch.autograd.Variable(idf_weights.t().unsqueeze(1), requires_grad=False)
+#         input()
 
         # each context vector c_t is the weighted average
         # over all the source hidden states

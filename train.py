@@ -208,7 +208,7 @@ def make_dataset_iter(datasets, fields, opt, is_train=True):
                            device, is_train)
 
 
-def make_loss_compute(model, tgt_vocab, opt, train=True):
+def make_loss_compute(model, tgt_vocab, opt, train=True, fields=None):
     """
     This returns user-defined LossCompute object, which is used to
     compute loss in train/validate process. You can implement your
@@ -229,9 +229,17 @@ def make_loss_compute(model, tgt_vocab, opt, train=True):
                 opt.copy_loss_by_seqlength)
     
     else:
+        # idf class weigths
+        if opt.obj_f == "ml" and opt.idf_class_weights and fields is not None:
+            idf = onmt.modules.Idf(revision_num = opt.idf_revision_num)
+            words = [ fields["tgt"].vocab.itos[i] for i in range(len(fields["tgt"].vocab)) ]            
+            words_df_weights = idf.get_idf_weights(None, words, revision=False if opt.idf_revision_num == 0 else True)
+        else:
+            words_df_weights = None
+        
         compute = onmt.Loss.NMTLossCompute(
             model.generator, tgt_vocab,
-            label_smoothing=opt.label_smoothing if train else 0.0)
+            label_smoothing=opt.label_smoothing if train else 0.0, initial_weight=words_df_weights)
 
     if use_gpu(opt):
         compute.cuda()
@@ -240,7 +248,9 @@ def make_loss_compute(model, tgt_vocab, opt, train=True):
 
 
 def train_model(model, fields, optim, data_type, model_opt):
-    train_loss = make_loss_compute(model, fields["tgt"].vocab, opt)
+    print("@")
+    train_loss = make_loss_compute(model, fields["tgt"].vocab, opt, fields=fields)
+    print("@@")
     valid_loss = make_loss_compute(model, fields["tgt"].vocab, opt,
                                    train=False)
 
