@@ -34,7 +34,35 @@ class Entailment_scorer:
 
     return entail_prob
 
-  
+  def predict_batch_entailment(self, premise_generator, hyp_generator):
+    batch_json_data = []
+    entail_probs = []
+
+    def update_result(prob_list, results):
+      for result in results:
+        #print(result)
+        prob_list.append(result["label_probs"][self.entail_index])
+
+    for premise, hyp in zip(premise_generator, hyp_generator):
+      premise = premise.strip()
+      hyp = hyp.strip()
+      
+      json_data = {"premise":premise, "hypothesis":hyp}
+      batch_json_data.append(json_data) 
+      if len(batch_json_data) == self.batch_size:
+        results = self.predictor.predict_batch_json(batch_json_data)
+        update_result(entail_probs, results)
+
+        batch_json_data = []
+        results = None
+    if len(batch_json_data) != 0:
+      results = self.predictor.predict_batch_json(batch_json_data)
+      update_result(entail_probs, results)
+
+      batch_json_data = []
+      results = None
+    
+    return entail_probs  
     
 
 if __name__ == "__main__":

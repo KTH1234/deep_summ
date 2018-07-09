@@ -346,18 +346,21 @@ class Translator(object):
         
 #         print("Translator line:338 src", src) # src_len * batch * 1
 #         print("Translator line:339 memory_bank", memory_bank) # src len * batch * hidden
-        idf_size = self.idf_attn_weights.size(0)
+        if self.idf_attn_weight:
+          idf_size = self.idf_attn_weights.size(0)
 #         print("Translator line:346 expand idf", self.idf_attn_weights.unsqueeze(0).repeat(src.size(0), 1).contiguous()) # src_len * idf size
 #         print("Translator line:346 expand src squeeze -1", src.data.squeeze(-1)) # src_len * src_vocab size
 
 #         print("Translator line:346 expand ooi", sum(src.data > idf_size)) # src_len * idf size       
 #         print("Translator line:346 expand ooi", sum(src.data > idf_size+1)) # src_len * idf size       
-        idf_attn_weights = torch.gather(self.idf_attn_weights.unsqueeze(0).repeat(src.size(0), 1).contiguous(), 1, src.data.squeeze(-1).contiguous())
+          idf_attn_weights = torch.gather(self.idf_attn_weights.unsqueeze(0).repeat(src.size(0), 1).contiguous(), 1, src.data.squeeze(-1).contiguous())
 #         print("Translator line:339 idf attn weights", idf_attn_weights)
 #         idf_attn_weights = rvar(idf_attn_weights)
-        idf_attn_weights = idf_attn_weights.repeat(1, beam_size)
+          idf_attn_weights = idf_attn_weights.repeat(1, beam_size)
 #         print("Translator line:339 idf attn weights", idf_attn_weights)
 #         print("Translator line:339 idf", memory_bank)
+        else:
+          idf_attn_weights = None
         
 
         if src_lengths is None:
