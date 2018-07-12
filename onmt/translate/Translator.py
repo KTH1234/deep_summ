@@ -346,14 +346,17 @@ class Translator(object):
         
 #         print("Translator line:338 src", src) # src_len * batch * 1
 #         print("Translator line:339 memory_bank", memory_bank) # src len * batch * hidden
-        if self.idf_attn_weight:
+#         print("Translator line:339 src_lengths", src_lengths[0]) # src len * batch * hidden
+        if self.idf_attn_weight and src_lengths[0] <= 2000:
           idf_size = self.idf_attn_weights.size(0)
 #         print("Translator line:346 expand idf", self.idf_attn_weights.unsqueeze(0).repeat(src.size(0), 1).contiguous()) # src_len * idf size
 #         print("Translator line:346 expand src squeeze -1", src.data.squeeze(-1)) # src_len * src_vocab size
 
 #         print("Translator line:346 expand ooi", sum(src.data > idf_size)) # src_len * idf size       
 #         print("Translator line:346 expand ooi", sum(src.data > idf_size+1)) # src_len * idf size       
-          idf_attn_weights = torch.gather(self.idf_attn_weights.unsqueeze(0).repeat(src.size(0), 1).contiguous(), 1, src.data.squeeze(-1).contiguous())
+          idf_attn_weights = None
+          idf_attn_weights = torch.gather(self.idf_attn_weights.unsqueeze(0).expand(src.size(0), -1).contiguous(), 1, src.data.squeeze(-1).contiguous())
+    
 #         print("Translator line:339 idf attn weights", idf_attn_weights)
 #         idf_attn_weights = rvar(idf_attn_weights)
           idf_attn_weights = idf_attn_weights.repeat(1, beam_size)
@@ -521,9 +524,14 @@ class Translator(object):
         return gold_scores
 
     def _report_score(self, name, score_total, words_total):
-        print("%s AVG SCORE: %.4f, %s PPL: %.4f" % (
+        try:
+            print("%s AVG SCORE: %.4f, %s PPL: %.4f" % (
             name, score_total / words_total,
             name, math.exp(-score_total / words_total)))
+        except OverflowError:
+            print("Overflow occured")
+            print("Translator line 521 score_total", score_total)
+            print("Translator line 521 words_total", words_total)
 
     def _report_bleu(self, tgt_path):
         import subprocess

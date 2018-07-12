@@ -11,11 +11,18 @@ import onmt.ModelConstructor
 import onmt.modules
 import onmt.opts
 
+import timeit
 
 def main(opt):
+    
+    
     translator = make_translator(opt, report_score=True)
+    
+    start = timeit.default_timer()
     _, attns_info, oov_info, copy_info = translator.translate(opt.src_dir, opt.src, opt.tgt,
                          opt.batch_size, opt.attn_debug)
+    end = timeit.default_timer()
+    print("Translation takes {}s".foramt(end-start))
     
     # currently attns_info,oov_info only contain first index data of batch
     return attns_info, oov_info, copy_info
