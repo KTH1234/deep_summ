@@ -22,7 +22,7 @@ def main(opt):
     _, attns_info, oov_info, copy_info = translator.translate(opt.src_dir, opt.src, opt.tgt,
                          opt.batch_size, opt.attn_debug)
     end = timeit.default_timer()
-    print("Translation takes {}s".foramt(end-start))
+    print("Translation takes {}s".format(end-start))
     
     # currently attns_info,oov_info only contain first index data of batch
     return attns_info, oov_info, copy_info
