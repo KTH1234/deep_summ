@@ -126,6 +126,12 @@ def preprocess_opts(parser):
     group.add_argument('-data_type', default="text",
                        help="""Type of the source input.
                        Options are [text|img].""")
+    
+    group.add_argument('-context_delimiter_char', default="text",
+                       help="""context delimiter character for hierarchical dataset""")
+    group.add_argument('-remove_delimiter', action='store_true',
+                       help="remove delimiter character from training at the hierarhical dataset")    
+    
 
     group.add_argument('-train_src', required=True,
                        help="Path to the training source data")

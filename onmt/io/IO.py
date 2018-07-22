@@ -12,6 +12,8 @@ from onmt.io.DatasetBase import UNK_WORD, PAD_WORD, BOS_WORD, EOS_WORD
 from onmt.io.TextDataset import TextDataset
 from onmt.io.ImageDataset import ImageDataset
 from onmt.io.AudioDataset import AudioDataset
+from onmt.io.HierarchicalDataset import HierarchicalDataset
+
 
 
 def _getstate(self):
@@ -40,12 +42,16 @@ def get_fields(data_type, n_src_features, n_tgt_features):
         A dictionary whose keys are strings and whose values are the
         corresponding Field objects.
     """
+    print("IO line:45 get_fileds, datatype", data_type)
+    
     if data_type == 'text':
         return TextDataset.get_fields(n_src_features, n_tgt_features)
     elif data_type == 'img':
         return ImageDataset.get_fields(n_src_features, n_tgt_features)
     elif data_type == 'audio':
         return AudioDataset.get_fields(n_src_features, n_tgt_features)
+    elif data_type == 'hierarchical_text':
+        return HierarchicalDataset.get_fields(n_src_features, n_tgt_features)
 
 
 def load_fields_from_vocab(vocab, data_type="text"):
@@ -112,6 +118,8 @@ def get_num_features(data_type, corpus_file, side):
         return ImageDataset.get_num_features(corpus_file, side)
     elif data_type == 'audio':
         return AudioDataset.get_num_features(corpus_file, side)
+    elif data_type == "hierarchical_text":
+        return HierarchicalDataset.get_num_features(corpus_file, side)
 
 
 def make_features(batch, side, data_type='text'):
@@ -197,6 +205,14 @@ def build_dataset(fields, data_type, src_path, tgt_path, src_dir=None,
                               tgt_seq_length=tgt_seq_length,
                               dynamic_dict=dynamic_dict,
                               use_filter_pred=use_filter_pred)
+        
+    if data_type == 'hierarchical_text':
+        dataset = HierarhicalDataset(fields, src_examples_iter, tgt_examples_iter,
+                              num_src_feats, num_tgt_feats,
+                              src_seq_length=src_seq_length,
+                              tgt_seq_length=tgt_seq_length,
+                              dynamic_dict=dynamic_dict,
+                              use_filter_pred=use_filter_pred)        
 
     elif data_type == 'img':
         dataset = ImageDataset(fields, src_examples_iter, tgt_examples_iter,
@@ -300,7 +316,7 @@ def build_vocab(train_dataset_files, fields, data_type, share_vocab,
         _build_field_vocab(fields[key], counter[key])
         print(" * %s vocab size: %d." % (key, len(fields[key].vocab)))
 
-    if data_type == 'text':
+    if data_type == 'text' or data_type == "hierarchical_text":
         _build_field_vocab(fields["src"], counter["src"],
                            max_size=src_vocab_size,
                            min_freq=src_words_min_frequency)
@@ -322,6 +338,8 @@ def build_vocab(train_dataset_files, fields, data_type, share_vocab,
                 vocab_size=src_vocab_size)
             fields["src"].vocab = merged_vocab
             fields["tgt"].vocab = merged_vocab
+     
+    print("IO line:340 fields",fields.keys())
 
     return fields
 
@@ -339,6 +357,11 @@ def _make_examples_nfeats_tpl(data_type, src_path, src_dir,
         src_examples_iter, num_src_feats = \
             TextDataset.make_text_examples_nfeats_tpl(
                 src_path, src_seq_length_trunc, "src")
+            
+    elif data_type == "hierarchical_text":
+        src_examples_iter, num_src_feats = \
+            TextDataset.make_text_examples_nfeats_tpl(
+                src_path, src_seq_length_trunc, "src")                    
 
     elif data_type == 'img':
         src_examples_iter, num_src_feats = \

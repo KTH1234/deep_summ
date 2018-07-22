@@ -360,10 +360,13 @@ def load_fields(dataset, data_type, checkpoint):
     else:
         fields = onmt.io.load_fields_from_vocab(
             torch.load(opt.data + '.vocab.pt'), data_type)
+#     print("train line:363 fields", fields)
+#     print("train line:363 dataset example", dataset.examples[0].__dict__.keys())
     fields = dict([(k, f) for (k, f) in fields.items()
                    if k in dataset.examples[0].__dict__])
+    print("train line:367 fields", fields)
 
-    if data_type == 'text':
+    if data_type == 'text' or data_type == "hierarchical_text":
         print(' * vocabulary size. source = %d; target = %d' %
               (len(fields['src'].vocab), len(fields['tgt'].vocab)))
     else:

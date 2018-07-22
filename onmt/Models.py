@@ -188,6 +188,98 @@ class RNNEncoder(EncoderBase):
             outs = bottle_hidden(self.bridge[0], hidden)
         return outs
 
+class ContextEncoder(EncoderBase):
+    """ Context encoder for hierarchical seq2seq
+
+    Args:
+       rnn_type (:obj:`str`):
+          style of recurrent unit to use, one of [RNN, LSTM, GRU, SRU]
+       bidirectional (bool) : use a bidirectional RNN
+       num_layers (int) : number of stacked layers
+       hidden_size (int) : hidden size of each layer
+       dropout (float) : dropout value for :obj:`nn.Dropout`
+       input_size (int): size of input
+    """
+    def __init__(self, rnn_type, bidirectional, num_layers,
+                 hidden_size, dropout=0.0, input_size=None,
+                 use_bridge=False):
+        super(ContextEncoder, self).__init__()
+        assert input_size is not None
+
+        num_directions = 2 if bidirectional else 1
+        assert hidden_size % num_directions == 0
+        hidden_size = hidden_size // num_directions
+
+        self.rnn, self.no_pack_padded_seq = \
+            rnn_factory(rnn_type,
+                        input_size=input_size,
+                        hidden_size=hidden_size,
+                        num_layers=num_layers,
+                        dropout=dropout,
+                        bidirectional=bidirectional)
+
+        # Initialize the bridge layer
+        self.use_bridge = use_bridge
+        if self.use_bridge:
+            self._initialize_bridge(rnn_type,
+                                    hidden_size,
+                                    num_layers)
+
+    def forward(self, src, lengths=None, encoder_state=None):
+        "See :obj:`EncoderBase.forward()`"
+        self._check_args(src, lengths, encoder_state)
+
+        s_len, batch, emb_dim = src.size()
+
+        packed_emb = src
+        if lengths is not None and not self.no_pack_padded_seq:
+            # Lengths data is wrapped inside a Variable.
+            lengths = lengths.view(-1).tolist()
+            packed_emb = pack(src, lengths)
+
+        memory_bank, encoder_final = self.rnn(packed_emb, encoder_state)
+
+        if lengths is not None and not self.no_pack_padded_seq:
+            memory_bank = unpack(memory_bank)[0]
+
+        if self.use_bridge:
+            encoder_final = self._bridge(encoder_final)
+        return encoder_final, memory_bank
+
+    def _initialize_bridge(self, rnn_type,
+                           hidden_size,
+                           num_layers):
+
+        # LSTM has hidden and cell state, other only one
+        number_of_states = 2 if rnn_type == "LSTM" else 1
+        # Total number of states
+        self.total_hidden_dim = hidden_size * num_layers
+
+        # Build a linear layer for each
+        self.bridge = nn.ModuleList([nn.Linear(self.total_hidden_dim,
+                                               self.total_hidden_dim,
+                                               bias=True)
+                                     for i in range(number_of_states)])
+
+    def _bridge(self, hidden):
+        """
+        Forward hidden state through bridge
+        """
+        def bottle_hidden(linear, states):
+            """
+            Transform from 3D to 2D, apply linear and return initial size
+            """
+            size = states.size()
+            result = linear(states.view(-1, self.total_hidden_dim))
+            return F.relu(result).view(size)
+
+        if isinstance(hidden, tuple):  # LSTM
+            outs = tuple([bottle_hidden(layer, hidden[ix])
+                          for ix, layer in enumerate(self.bridge)])
+        else:
+            outs = bottle_hidden(self.bridge[0], hidden)
+        return outs    
+    
 
 class RNNDecoderBase(nn.Module):
     """
@@ -548,6 +640,144 @@ class InputFeedRNNDecoder(RNNDecoderBase):
 #         print("model line:509 attns", attns)
         # Return result.
         return hidden, decoder_outputs, attns
+    
+    def _build_rnn(self, rnn_type, input_size,
+                   hidden_size, num_layers, dropout):
+        assert not rnn_type == "SRU", "SRU doesn't support input feed! " \
+                "Please set -input_feed 0!"
+        if rnn_type == "LSTM":
+            stacked_cell = onmt.modules.StackedLSTM
+        else:
+            stacked_cell = onmt.modules.StackedGRU
+        return stacked_cell(num_layers, input_size,
+                            hidden_size, dropout)
+
+    # initiating attn history information (for intra-temporal, intra decoder attn)
+    def init_attn_history(self):
+        # for intra-temporal attention, init attn history per every batches
+        self.attn.init_attn_outputs()
+        # for intra-decoder attention, init decoder history per every batches
+        self.attn.init_decoder_outputs()
+#         print("Model line:371, attn history called")    
+    
+    @property
+    def _input_size(self):
+        """
+        Using input feed by concatenating input with attention vectors.
+        """
+        return self.embeddings.embedding_size + self.hidden_size    
+    
+class HierarchicalInputFeedRNNDecoder(RNNDecoderBase):
+    """
+    Input feeding based decoder. See :obj:`RNNDecoderBase` for options.
+
+    Based around the input feeding approach from
+    "Effective Approaches to Attention-based Neural Machine Translation"
+    :cite:`Luong2015`
+
+
+    .. mermaid::
+
+       graph BT
+          A[Input n-1]
+          AB[Input n]
+          subgraph RNN
+            E[Pos n-1]
+            F[Pos n]
+            E --> F
+          end
+          G[Encoder]
+          H[Memory_Bank n-1]
+          A --> E
+          AB --> F
+          E --> H
+          G --> H
+    """
+
+    def _run_forward_pass(self, tgt, memory_bank, state, memory_lengths=None, idf_weights=None):
+        """
+        See StdRNNDecoder._run_forward_pass() for description
+        of arguments and return values.
+        """
+        # Additional args check.
+        input_feed = state.input_feed.squeeze(0)
+        input_feed_batch, _ = input_feed.size()
+        tgt_len, tgt_batch, _ = tgt.size()
+        aeq(tgt_batch, input_feed_batch)
+        # END Additional args check.
+
+        # Initialize local and return variables.
+        decoder_outputs = []
+        attns = {"std": []}
+        if self._copy:
+            attns["copy"] = []
+        if self._coverage:
+            attns["coverage"] = []
+
+        # for intra-temporal attention, init attn history per every batches
+#         self.attn.init_attn_outputs()
+        # for intra-decoder attention, init decoder history per every batches
+#         self.attn.init_decoder_outputs()
+        
+#         print("model line:486, mb", memory_bank)
+#         print(tgt[0])
+#         input("model line:497")
+
+        emb = self.embeddings(tgt)
+        assert emb.dim() == 3  # len x batch x embedding_dim
+
+        hidden = state.hidden
+        coverage = state.coverage.squeeze(0) \
+            if state.coverage is not None else None
+
+        # Input feed concatenates hidden state with
+        # input at every time step.
+        for i, emb_t in enumerate(emb.split(1)):
+
+            emb_t = emb_t.squeeze(0)
+            decoder_input = torch.cat([emb_t, input_feed], 1)
+
+            rnn_output, hidden = self.rnn(decoder_input, hidden)
+#             print("model line 508 before attn")
+            decoder_output, p_attn = self.attn(
+                rnn_output,
+                memory_bank.transpose(0, 1),
+                memory_lengths=memory_lengths,
+                emb_weight=self.embeddings.word_lut.weight,
+                idf_weights = idf_weights
+            ) # for sharing decoder weight
+#             print("model line 513 after attn")
+            if self.context_gate is not None:
+                # TODO: context gate should be employed
+                # instead of second RNN transform.
+                decoder_output = self.context_gate(
+                    decoder_input, rnn_output, decoder_output
+                )
+            decoder_output = self.dropout(decoder_output)
+            input_feed = decoder_output
+
+            decoder_outputs += [decoder_output]
+#             print("model line:529 dec out", decoder_output.size())
+            attns["std"] += [p_attn]
+#             print("model line:530 p_attn", p_attn)
+
+            # Update the coverage attention.
+            if self._coverage:
+                coverage = coverage + p_attn \
+                    if coverage is not None else p_attn
+                attns["coverage"] += [coverage]
+
+            # Run the forward pass of the copy attention layer.
+            # TODO 이게 왜 있는지 알아봐야함
+#             if self._copy and not self._reuse_copy_attn:
+#                 _, copy_attn = self.copy_attn(decoder_output,
+#                                               memory_bank.transpose(0, 1))
+#                 attns["copy"] += [copy_attn]
+            if self._copy:
+                attns["copy"] = attns["std"]
+#         print("model line:509 attns", attns)
+        # Return result.
+        return hidden, decoder_outputs, attns    
 
     def _build_rnn(self, rnn_type, input_size,
                    hidden_size, num_layers, dropout):
@@ -614,6 +844,306 @@ class NMTModel(nn.Module):
                      * final decoder state
         """
 #         print("model line:602", self.obj_f)
+        tgt = tgt[:-1]  # exclude last target from inputs
+
+        enc_final, memory_bank = self.encoder(src, lengths)
+        enc_state = \
+            self.decoder.init_decoder_state(src, memory_bank, enc_final)
+            
+        self.decoder.init_attn_history() # init attn history in decoder for new attention
+        
+        decoder_outputs, dec_state, attns = \
+            self.decoder(tgt, memory_bank,
+                         enc_state if dec_state is None
+                         else dec_state,
+                         memory_lengths=lengths)
+        if self.multigpu:
+            # Not yet supported on multi-gpu
+            dec_state = None
+            attns = None            
+            
+        return decoder_outputs, attns, dec_state
+
+    
+    def sample(self, src, tgt, lengths, dec_states=None, batch=None, mode="sample", eos_index=3):
+        """Forward propagate a `src` and `tgt` pair for training.
+        Possible initialized with a beginning decoder state.
+
+        Args:
+            src (:obj:`Tensor`):
+                a source sequence passed to encoder.
+                typically for inputs this will be a padded :obj:`LongTensor`
+                of size `[len x batch x features]`. however, may be an
+                image or other generic input depending on encoder.
+            tgt (:obj:`LongTensor`):
+                 a target sequence of size `[tgt_len x batch]`.
+            lengths(:obj:`LongTensor`): the src lengths, pre-padding `[batch]`.
+            dec_states (:obj:`DecoderState`, optional): initial decoder state
+        Returns:
+            (:obj:`FloatTensor`, `dict`, :obj:`onmt.Models.DecoderState`):
+
+                 * decoder output `[tgt_len x batch x hidden]`
+                 * dictionary attention dists of `[tgt_len x batch x src_len]`
+                 * final decoder state
+        """
+        
+#         print("model line:602", self.obj_f)
+        tgt = tgt[:-1]  # exclude last target from inputs
+
+        enc_final, memory_bank = self.encoder(src, lengths)
+        dec_states = \
+            self.decoder.init_decoder_state(src, memory_bank, enc_final)
+       
+#         print("model line 662 enc_state", enc_final)
+#         print("model line 663 enc_state hidden", enc_state.hidden)
+#         input()
+            
+        self.decoder.init_attn_history() # init attn history in decoder for new attention
+        
+        assert self.obj_f == "rl" or self.obj_f == "hybrid"
+        assert batch != None
+        def _unbottle(v, batch_size):
+            return v.view(-1, batch_size, v.size(1))
+            
+        # Initialize local and return variables.
+        decoder_outputs = []
+        probs = []
+        out_indices = []
+        attns = {"std": []}
+        if self.decoder._copy:
+            attns["copy"] = []
+        if self.decoder._coverage:
+            attns["coverage"] = []
+                     
+#         print("model line:622, tgt.size", tgt.size(0))
+        for i in range(tgt.size(0)):
+            # initial bos tokens
+            if i == 0:
+                inp = tgt[0].unsqueeze(0)
+#                 print("model line:679 inp", inp.view(1,-1))
+#                 print("model line:689 inpu.req", inp.requires_grad)
+            # test code
+            else:
+#                 print("model line:682 inp", i, out_indices[-1])            
+#                 input()
+                inp = Variable(out_indices[-1], requires_grad=False).cuda().unsqueeze(0).unsqueeze(2)
+                
+
+
+
+            # Turn any copied words to UNKs
+            # 0 is unk
+            if self.decoder._copy or self.decoder.copy_attn:
+                inp = inp.masked_fill(
+                    inp.gt(len(batch.dataset.fields['tgt'].vocab) - 1), 0)
+#             inp = inp.unsqueeze(2)             
+#             print("model line:682 inp", i, inp)
+
+            # Run one step.
+            dec_out, dec_states, attn = self.decoder(
+                inp, memory_bank, dec_states, memory_lengths=lengths)
+            dec_out = dec_out.squeeze(0)
+            # dec_out: beam x rnn_size                    
+
+            # (b) Compute a vector of batch x beam word scores.
+            if not self.decoder._copy and not self.decoder.copy_attn:
+                out = self.generator.forward(dec_out).data
+                out = unbottle(out)
+                # beam x tgt_vocab
+                beam_attn = unbottle(attn["std"])
+            else:
+                out = self.generator.forward(dec_out,
+                                                   attn["copy"].squeeze(0),
+                                                   batch.src_map)
+                # batch x (tgt_vocab + extra_vocab)
+#                 print("model line:714 out dec_out", dec_out) # variable
+#                 print("model line:714 out prob", out) # variable
+#                 print("model line:729 out data prob", out) # batch * vocab size
+                out = batch.dataset.collapse_copy_scores(
+                    _unbottle(out.data, len(batch)),
+                    batch, batch.dataset.fields["tgt"].vocab, batch.dataset.src_vocabs)
+                # batch x tgt_vocab
+#                 out_data = out_data.log()
+                out = out.log().squeeze(0) # batch_size * (tgt_vocab + ext)
+                
+#             print("model line:729 out mode", mode)
+#             print("model line:729 out data prob", out) # batch * vocab size
+#             input()
+
+            if mode == "greedy":
+#                 _, index = torch.max(out.data,1)
+                _, index = torch.max(out,1)
+#                 print("model line 734, index", index)
+#                 print("model line 735, out", out)
+#                 prob = out.gather(1, Variable(index.unsqueeze(1), requires_grad=False)) # batchsize * 1
+                # prob : 1*batch size
+                # index : 1*batcch size
+            elif mode == "sample": 
+#                 print("model line:734 multi", torch.exp(out.squeeze(0)))
+#                 input()
+#                 index = torch.multinomial(torch.exp(out.data.squeeze(0)),1) # batchsize*1
+                index = torch.multinomial(torch.exp(out),1) # batchsize*1
+#                 print("model line 734, index", index)
+#                 print("model line 735, out", out)
+#                 prob = out.gather(1, Variable(index, requires_grad=False)) # batchsize * 1
+    
+            index = index.view(-1)
+        
+            # control intermediate termination 
+            # eos index is 3
+            # padding index is 1
+            if i == 0:
+                unfinished = index != eos_index
+            else:
+                unfinished = unfinished * ( out_indices[-1] != eos_index )
+            if unfinished.sum() == 0:
+                break
+                
+            if len(out_indices) > 0:
+#                 print("Model line 766: index", index)
+                index = index * unfinished.type_as(index) + (unfinished == 0).type_as(index) # pad 1
+#                 print("Model line 766: index", index)
+#                 print("Model line 767: unfinished", unfinished)
+            
+#             probs += [prob.view(-1)]
+            out_indices += [index]
+
+#             print("model line:726 out_indices")
+#             for index in out_indices:
+#                 print(index.view(1,-1))
+            
+                    
+            # update history
+#             print("model line:679 dec out", dec_out.size()) # batch * hidden size
+            decoder_outputs += [dec_out]
+#             print("model line:677 attns", attn["std"][0])
+            attns["std"] += [attn["std"][0]]
+            # Update the coverage attention.
+            if self.decoder._coverage:
+                coverage = coverage + p_attn \
+                    if coverage is not None else p_attn
+                attns["coverage"] += attn["coverage"][0]
+
+            # Run the forward pass of the copy attention layer.
+            # TODO
+#             if self.decoder._copy and not self.decoder._reuse_copy_attn:
+#                 _, copy_attn = self.decoder.copy_attn(dec_out,
+#                                               memory_bank.transpose(0, 1))
+#                 attns["copy"] += [copy_attn]
+            if self.decoder._copy:
+                attns["copy"] = attns["std"] 
+                
+        # Update the state with the result.
+        final_output = decoder_outputs[-1]
+        coverage = None
+        if "coverage" in attns:
+            coverage = attns["coverage"][-1].unsqueeze(0)
+        dec_states.update_state(dec_out, final_output.unsqueeze(0), coverage)
+
+        # Concatenates sequence of tensors along a new dimension.
+        decoder_outputs = torch.stack(decoder_outputs)
+        for k in attns:
+            attns[k] = torch.stack(attns[k])              
+
+        # pad eos if not finished 3 is eos token
+        # remove
+#         if unfinished.sum() != 0:
+#             unfinished = unfinished * ( out_indices[-1] != eos_index )
+#             index = eos_index * unfinished.type_as(index) +  (unfinished == 0).type_as(index) # pad 1
+#             out_indices += [index]    
+    #         probs = torch.stack(probs)
+        out_indices = torch.stack(out_indices)
+#         print("model line 770 probx, out_indices", probs.size(), out_indices.size()) # tgt_len * batch size
+#         input("model line:771")
+    
+#         return decoder_outputs, attns, dec_states, probs, out_indices
+        return decoder_outputs, attns, dec_states, out_indices
+
+class HierarchicalModel(nn.Module):
+    """
+    Core trainable object in OpenNMT. Implements a trainable interface
+    for a simple, generic encoder + decoder model.
+
+    Args:
+      encoder (:obj:`EncoderBase`): an encoder object
+      decoder (:obj:`RNNDecoderBase`): a decoder object
+      multi<gpu (bool): setup for multigpu support
+    """
+    def __init__(self, context_encoder, sent_encoder, decoder, multigpu=False):
+        self.multigpu = multigpu
+        super(HierarchicalModel, self).__init__()
+        self.context_encoder = context_encoder
+        self.sent_sencoder = sent_encoder
+        self.decoder = decoder
+
+    def forward(self, src, tgt, lengths, dec_state=None, batch=None):
+        """Forward propagate a `src` and `tgt` pair for training.
+            Possible initialized with a beginning decoder state.
+
+            Args:
+                src (:obj:`Tensor`):
+                    a source sequence passed to encoder.
+                    typically for inputs this will be a padded :obj:`LongTensor`
+                    of size `[len x batch x features]`. however, may be an
+                    image or other generic input depending on encoder.
+                tgt (:obj:`LongTensor`):
+                     a target sequence of size `[tgt_len x batch]`.
+                lengths(:obj:`LongTensor`): the src lengths, pre-padding `[batch]`.
+                dec_state (:obj:`DecoderState`, optional): initial decoder state
+            Returns:
+                (:obj:`FloatTensor`, `dict`, :obj:`onmt.Models.DecoderState`):
+
+                     * decoder output `[tgt_len x batch x hidden]`
+                     * dictionary attention dists of `[tgt_len x batch x src_len]`
+                     * final decoder state
+        """
+#         print("model line:602", self.obj_f)
+        assert batch is not None
+        max_context_length = torch.max(batch.context_lengthes)
+        print("Model line 1102, context_lengthes", max_context_length)
+        print("Model line 1103, ssrc size", src.size())
+        print("Model line 1103, batchsize",len(batch))
+#         input("Model line 1101")
+        
+        def get_context(src, context_mask, batch_size, index):
+            submask = context_mask == index
+            print("Model line:1110 submask", submask) # src_len * batch size
+
+            sub_context = []
+            sub_context_len = torch.sum(submask, 0).long()
+            max_sub_context_len = torch.max(sub_context_len)
+            print("Model line:1110 submask 0", torch.sum(submask, 0).view(1,-1)) # batch size
+#             print("Model line:1110 submask 1", torch.sum(submask, 1).view(1,-1)) # src length
+#             print("Model line:1117 sum max_sub_context_len", max_sub_context_len) # batch_size
+            print("Model line:1118 sum submask", submask.long().sum())
+#             print("Model line:1119 mask select", torch.masked_select(src, submask).view(1,-1)) # sum submask
+
+    
+            selected_context = torch.masked_select(src, submask)
+            print("Model line:1123 selected context len", selected_context.size())
+            sub_context = torch.ones(batch_size, max_sub_context_len.data[0]).long()
+            print("Model line:1124 sub_context", sub_context)
+            accm = 0
+            for i, mask_len in enumerate(sub_context_len):
+                mask_len = mask_len.data[0]
+                sub_context[i] = selected_context.data[accm:accm + mask_len]
+                accm += mask_len
+#                 print(accm)
+            print("Model line:1124 sub_context", sub_context)                           
+            
+            input()            
+            return None, None
+            
+        
+        for i in range(max_context_length.data[0]):
+            sub_context, sub_context_len = get_context(src, batch.context_mask, len(batch), i)            
+            
+        
+        
+            
+    
+    
+    
         tgt = tgt[:-1]  # exclude last target from inputs
 
         enc_final, memory_bank = self.encoder(src, lengths)

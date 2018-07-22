@@ -351,7 +351,12 @@ class Trainer(object):
 #             print("Trainer line 299: src")
 #             print(src)
 #             print("Trainer line 302: tgt")
-#             print(tgt_outer)                         
+#             print(tgt_outer)    
+#             print("Trainer line 355: context mask", batch.context_mask)
+#             print("Trainer line 355: indices", batch.indices)
+#             print("Trainer line 355: batch", batch)
+#             print("Trainer line 355: context length", batch.context_lengthes)
+#             input()
 
             for j in range(0, target_size-1, trunc_size):
                 # 1. Create truncated target.

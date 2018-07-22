@@ -91,12 +91,21 @@ def build_save_text_dataset_in_shards(src_corpus, tgt_corpus, fields,
     index = 0
     while not src_iter.hit_end():
         index += 1
-        dataset = onmt.io.TextDataset(
-            fields, src_iter, tgt_iter,
-            src_iter.num_feats, tgt_iter.num_feats,
-            src_seq_length=opt.src_seq_length,
-            tgt_seq_length=opt.tgt_seq_length,
-            dynamic_dict=opt.dynamic_dict)
+        if opt.data_type == "hierarchical_text":
+            dataset = onmt.io.HierarchicalDataset(
+                fields, src_iter, tgt_iter,
+                opt.context_delimiter_char, opt.remove_delimiter,
+                src_iter.num_feats, tgt_iter.num_feats,
+                src_seq_length=opt.src_seq_length,
+                tgt_seq_length=opt.tgt_seq_length,
+                dynamic_dict=opt.dynamic_dict)            
+        else:
+            dataset = onmt.io.TextDataset(
+                fields, src_iter, tgt_iter,                
+                src_iter.num_feats, tgt_iter.num_feats,
+                src_seq_length=opt.src_seq_length,
+                tgt_seq_length=opt.tgt_seq_length,
+                dynamic_dict=opt.dynamic_dict)
 
         # We save fields in vocab.pt seperately, so make it empty.
         dataset.fields = []
@@ -122,7 +131,8 @@ def build_save_dataset(corpus_type, fields, opt):
         tgt_corpus = opt.valid_tgt
 
     # Currently we only do preprocess sharding for corpus: data_type=='text'.
-    if opt.data_type == 'text':
+    if opt.data_type == 'text' or opt.data_type == "hierarchical_text":
+        print("Preprocess line:126 data type", opt.data_type)
         return build_save_text_dataset_in_shards(
             src_corpus, tgt_corpus, fields,
             corpus_type, opt)

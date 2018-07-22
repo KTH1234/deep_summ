@@ -9,8 +9,8 @@ import onmt
 import onmt.io
 import onmt.Models
 import onmt.modules
-from onmt.Models import NMTModel, MeanEncoder, RNNEncoder, \
-                        StdRNNDecoder, InputFeedRNNDecoder
+from onmt.Models import NMTModel, MeanEncoder, RNNEncoder, ContextEncoder, \
+                        StdRNNDecoder, InputFeedRNNDecoder, HierarchicalModel, HierarchicalInputFeedRNNDecoder
 from onmt.modules import Embeddings, ImageEncoder, CopyGenerator, \
                          TransformerEncoder, TransformerDecoder, \
                          CNNEncoder, CNNDecoder, AudioEncoder
@@ -92,6 +92,17 @@ def make_decoder(opt, embeddings):
                           opt.global_attention, opt.copy_attn,
                           opt.cnn_kernel_width, opt.dropout,
                           embeddings)
+    elif opt.model_type == "hierarchical_text":
+        print("ModelConstructor line:96 hierarchical text decoder")
+        return HierarchicalInputFeedRNNDecoder(opt.rnn_type, opt.brnn,
+                                   opt.dec_layers, opt.rnn_size,
+                                   opt.global_attention,
+                                   opt.coverage_attn,
+                                   opt.context_gate,
+                                   opt.copy_attn,
+                                   opt.dropout,
+                                   embeddings,
+                                   opt.reuse_copy_attn)
     elif opt.input_feed:
         return InputFeedRNNDecoder(opt.rnn_type, opt.brnn,
                                    opt.dec_layers, opt.rnn_size,
@@ -143,7 +154,7 @@ def make_base_model(model_opt, fields, gpu, checkpoint=None):
     Returns:
         the NMTModel.
     """
-    assert model_opt.model_type in ["text", "img", "audio"], \
+    assert model_opt.model_type in ["text", "img", "audio", "hierarchical_text"], \
         ("Unsupported model type %s" % (model_opt.model_type))
 
     # Make encoder.
@@ -153,6 +164,20 @@ def make_base_model(model_opt, fields, gpu, checkpoint=None):
         src_embeddings = make_embeddings(model_opt, src_dict,
                                          feature_dicts)
         encoder = make_encoder(model_opt, src_embeddings)
+    elif model_opt.model_type == "hierarchical_text":
+        print("Modelcounstructor line:157 make hierarchical model")
+        src_dict = fields["src"].vocab
+        feature_dicts = onmt.io.collect_feature_vocabs(fields, 'src')
+        src_embeddings = make_embeddings(model_opt, src_dict,
+                                         feature_dicts)
+        sent_encoder = make_encoder(model_opt, src_embeddings)        
+        
+        # because context length is not sorted
+        sent_encoder.no_pack_padded_seq = True
+        context_encoder = ContextEncoder(model_opt.rnn_type, model_opt.brnn, model_opt.enc_layers,
+                          model_opt.rnn_size, model_opt.dropout, model_opt.rnn_size,
+                          model_opt.bridge)
+
     elif model_opt.model_type == "img":
         encoder = ImageEncoder(model_opt.enc_layers,
                                model_opt.brnn,
@@ -184,7 +209,10 @@ def make_base_model(model_opt, fields, gpu, checkpoint=None):
     decoder = make_decoder(model_opt, tgt_embeddings)
 
     # Make NMTModel(= encoder + decoder).
-    model = NMTModel(encoder, decoder)
+    if model_opt.model_type == "hierarchical_text":
+        model = HierarchicalModel(context_encoder, sent_encoder, decoder)
+    else:
+        model = NMTModel(encoder, decoder)
     model.model_type = model_opt.model_type
     
     # for deep summarization
@@ -194,7 +222,7 @@ def make_base_model(model_opt, fields, gpu, checkpoint=None):
     
     print("ModelConstructor line:195, tgt vocab len", len(fields["tgt"].vocab))
     print("ModelConstructor line:196, tgt vocab freq len", len(fields["tgt"].vocab.freqs))
-    
+#     input("MC line 222")
     # get idf value
 #     words = [ fields["tgt"].vocab.itos[i] for i in range(len(fields["tgt"].vocab)) ]
 #     def get_df(src_file_path, words):
@@ -257,8 +285,10 @@ def make_base_model(model_opt, fields, gpu, checkpoint=None):
             for p in generator.parameters():
                 if p.dim() > 1:
                     xavier_uniform(p)
-
-        if hasattr(model.encoder, 'embeddings'):
+        if model_opt.model_type == "hierarhical_text" and hasattr(model.sent_encoder, 'embeddings'):
+            model.sent_encoder.embeddings.load_pretrained_vectors(
+                    model_opt.pre_word_vecs_enc, model_opt.fix_word_vecs_enc)                    
+        elif model_opt.model_type == "text" and hasattr(model.encoder, 'embeddings'):
             model.encoder.embeddings.load_pretrained_vectors(
                     model_opt.pre_word_vecs_enc, model_opt.fix_word_vecs_enc)
         if hasattr(model.decoder, 'embeddings'):
