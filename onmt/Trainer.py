@@ -257,7 +257,7 @@ class Trainer(object):
             self.valid_loss.cur_dataset = cur_dataset
 
             src = onmt.io.make_features(batch, 'src', self.data_type)
-            if self.data_type == 'text':
+            if self.data_type == 'text' or self.data_type == "hierarchical_text":
                 _, src_lengths = batch.src
             else:
                 src_lengths = None
@@ -265,7 +265,7 @@ class Trainer(object):
             tgt = onmt.io.make_features(batch, 'tgt')
 
             # F-prop through the model.
-            outputs, attns, _ = self.model(src, tgt, src_lengths)
+            outputs, attns, _ = self.model(src, tgt, src_lengths, batch=batch)
 
             # Compute loss.
             batch_stats = self.valid_loss.monolithic_compute_loss(
@@ -336,7 +336,7 @@ class Trainer(object):
                 max_sample_dec_state = dec_state.clone() if dec_state else None
             
             src = onmt.io.make_features(batch, 'src', self.data_type)
-            if self.data_type == 'text':
+            if self.data_type == 'text' or self.data_type == "hierarchical_text":
                 _, src_lengths = batch.src
                 report_stats.n_src_words += src_lengths.sum()
             else:
@@ -384,6 +384,7 @@ class Trainer(object):
                     # If truncated, don't backprop fully.
                     if dec_state is not None:
                         dec_state.detach()
+#                     input("trainer line 387")
                 elif self.model.obj_f == "rl":
                     # 2. F-prop all but generator.
                     if self.grad_accum_count == 1:

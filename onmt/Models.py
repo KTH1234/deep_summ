@@ -138,6 +138,8 @@ class RNNEncoder(EncoderBase):
 
         emb = self.embeddings(src)
         s_len, batch, emb_dim = emb.size()
+        
+#         print("Model line:142, emb size", emb.size())
 
         packed_emb = emb
         if lengths is not None and not self.no_pack_padded_seq:
@@ -238,6 +240,8 @@ class ContextEncoder(EncoderBase):
             packed_emb = pack(src, lengths)
 
         memory_bank, encoder_final = self.rnn(packed_emb, encoder_state)
+#         print("model line:243 context encoder output mem bank", memory_bank.size())
+#         print("model line:244 context encoder output encode final", encoder_final)
 
         if lengths is not None and not self.no_pack_padded_seq:
             memory_bank = unpack(memory_bank)[0]
@@ -331,7 +335,8 @@ class RNNDecoderBase(nn.Module):
                  hidden_size, attn_type="general",
                  coverage_attn=False, context_gate=None,
                  copy_attn=False, dropout=0.0, embeddings=None,
-                 reuse_copy_attn=False):
+                 reuse_copy_attn=False,
+                 model_type=None ):
         super(RNNDecoderBase, self).__init__()
 
         # Basic attributes.
@@ -359,10 +364,18 @@ class RNNDecoderBase(nn.Module):
 
         # Set up the standard attention.
         self._coverage = coverage_attn
-        self.attn = onmt.modules.GlobalAttention(
-            hidden_size, coverage=coverage_attn,
-            attn_type=attn_type
-        )
+        # hierarchical model
+        if model_type == "hierarchical_text":
+            self.attn = onmt.modules.HierarchicalAttention(
+                hidden_size, coverage=coverage_attn,
+                attn_type=attn_type
+            )            
+            print("model line:373 hierarchical attn")
+        else:
+            self.attn = onmt.modules.GlobalAttention(
+                hidden_size, coverage=coverage_attn,
+                attn_type=attn_type
+            )
 
         # Set up a separated copy attention layer, if needed.
         self._copy = False
@@ -598,9 +611,9 @@ class InputFeedRNNDecoder(RNNDecoderBase):
 
             emb_t = emb_t.squeeze(0)
             decoder_input = torch.cat([emb_t, input_feed], 1)
-
             rnn_output, hidden = self.rnn(decoder_input, hidden)
 #             print("model line 508 before attn")
+            #print("model line:815 decoder rnn output", rnn_output) # batch * hidden
             decoder_output, p_attn = self.attn(
                 rnn_output,
                 memory_bank.transpose(0, 1),
@@ -693,8 +706,58 @@ class HierarchicalInputFeedRNNDecoder(RNNDecoderBase):
           E --> H
           G --> H
     """
+    def forward(self, tgt, sentence_memory_bank, context_memory_bank, state, sentence_memory_lengths, context_memory_lengths, context_mask, idf_weights=None):
+        """
+        Args:
+            # 18.07.24 thkim
+            tgt (`LongTensor`): sequences of padded tokens
+                                `[tgt_len x batch x nfeats]`.
+            sentence_memory_bank (`FloatTensor`): vectors from the each sentence encoder res
+                 `[src_len x batch x hidden]`.
+            context_memory_bank (`FloatTensor`): vectors from the context encoder res
+                 `[src_len x batch x hidden]`.
+            state (:obj:`onmt.Models.DecoderState`):
+                 decoder state object to initialize the decoder
+            context_memory_lengths (`LongTensor`): the padded context lengths
+                `[batch]`.
+            # 18.07.05 by thkim
+            idf_weights : idf values, multiply it to attn weight
+            
+        Returns:
+            (`FloatTensor`,:obj:`onmt.Models.DecoderState`,`FloatTensor`):
+                * decoder_outputs: output from the decoder (after attn)
+                         `[tgt_len x batch x hidden]`.
+                * decoder_state: final hidden state from the decoder
+                * attns: distribution over src at each tgt
+                        `[tgt_len x batch x src_len]`.
+        """
+        # Check
+        assert isinstance(state, RNNDecoderState)
+        tgt_len, tgt_batch, _ = tgt.size()
+        _, memory_batch, _ = context_memory_bank.size()
+        aeq(tgt_batch, memory_batch)
+        # END
+        
+        # Run the forward pass of the RNN.
+        decoder_final, decoder_outputs, attns, context_attns = self._run_forward_pass(
+            tgt, sentence_memory_bank, context_memory_bank, state, sentence_memory_lengths, context_memory_lengths, context_mask, idf_weights=idf_weights)
 
-    def _run_forward_pass(self, tgt, memory_bank, state, memory_lengths=None, idf_weights=None):
+        # Update the state with the result.
+        final_output = decoder_outputs[-1]
+        coverage = None
+        if "coverage" in attns:
+            coverage = attns["coverage"][-1].unsqueeze(0)
+        state.update_state(decoder_final, final_output.unsqueeze(0), coverage)
+
+        # Concatenates sequence of tensors along a new dimension.
+        decoder_outputs = torch.stack(decoder_outputs)
+        for k in attns:
+            attns[k] = torch.stack(attns[k])
+
+        return decoder_outputs, state, attns, context_attns    
+    
+
+    def _run_forward_pass(self, tgt, sentence_memory_bank, context_memory_bank, state, sentence_memory_lengths, context_memory_lengths, context_mask, idf_weights=None):
         """
         See StdRNNDecoder._run_forward_pass() for description
         of arguments and return values.
@@ -709,11 +772,19 @@ class HierarchicalInputFeedRNNDecoder(RNNDecoderBase):
         # Initialize local and return variables.
         decoder_outputs = []
         attns = {"std": []}
+        context_attns = {"std": []}
         if self._copy:
             attns["copy"] = []
+            context_attns["copy"]  = []
         if self._coverage:
             attns["coverage"] = []
-
+            context_attns["coverage"] = []
+            
+#         print("model line 785 sent m bank", sentence_memory_bank)
+#         print("model line 785 context m bank", context_memory_bank)
+#         print("model line 785 sentence_memory_lengths", sentence_memory_lengths)
+#         print("model line 785 context_memory_lengths", context_memory_lengths)
+            
         # for intra-temporal attention, init attn history per every batches
 #         self.attn.init_attn_outputs()
         # for intra-decoder attention, init decoder history per every batches
@@ -737,16 +808,26 @@ class HierarchicalInputFeedRNNDecoder(RNNDecoderBase):
             emb_t = emb_t.squeeze(0)
             decoder_input = torch.cat([emb_t, input_feed], 1)
 
+#             print("model line:813 decoder hidden", hidden)
+#             print("model line:813 decoder input", decoder_input)
+#             print("model line:813 decoder input", input_feed)
             rnn_output, hidden = self.rnn(decoder_input, hidden)
 #             print("model line 508 before attn")
-            decoder_output, p_attn = self.attn(
+#             print("model line:815 decoder rnn output", rnn_output) # batch * hidden
+
+
+            decoder_output, p_attn, context_attn = self.attn(
                 rnn_output,
-                memory_bank.transpose(0, 1),
-                memory_lengths=memory_lengths,
+                sentence_memory_bank.transpose(0, 1),
+                context_memory_bank.transpose(0, 1),
+                sentence_memory_lengths,
+                context_memory_lengths,
+                context_mask,
                 emb_weight=self.embeddings.word_lut.weight,
                 idf_weights = idf_weights
             ) # for sharing decoder weight
 #             print("model line 513 after attn")
+
             if self.context_gate is not None:
                 # TODO: context gate should be employed
                 # instead of second RNN transform.
@@ -759,6 +840,7 @@ class HierarchicalInputFeedRNNDecoder(RNNDecoderBase):
             decoder_outputs += [decoder_output]
 #             print("model line:529 dec out", decoder_output.size())
             attns["std"] += [p_attn]
+            context_attns["std"] += [context_attn]
 #             print("model line:530 p_attn", p_attn)
 
             # Update the coverage attention.
@@ -766,6 +848,7 @@ class HierarchicalInputFeedRNNDecoder(RNNDecoderBase):
                 coverage = coverage + p_attn \
                     if coverage is not None else p_attn
                 attns["coverage"] += [coverage]
+                context_attns["coverage"] += [coverage]
 
             # Run the forward pass of the copy attention layer.
             # TODO 이게 왜 있는지 알아봐야함
@@ -775,9 +858,10 @@ class HierarchicalInputFeedRNNDecoder(RNNDecoderBase):
 #                 attns["copy"] += [copy_attn]
             if self._copy:
                 attns["copy"] = attns["std"]
+                context_attns["copy"] = context_attns["std"]
 #         print("model line:509 attns", attns)
         # Return result.
-        return hidden, decoder_outputs, attns    
+        return hidden, decoder_outputs, attns, context_attns  
 
     def _build_rnn(self, rnn_type, input_size,
                    hidden_size, num_layers, dropout):
@@ -845,11 +929,11 @@ class NMTModel(nn.Module):
         """
 #         print("model line:602", self.obj_f)
         tgt = tgt[:-1]  # exclude last target from inputs
-
+       
+        
         enc_final, memory_bank = self.encoder(src, lengths)
         enc_state = \
             self.decoder.init_decoder_state(src, memory_bank, enc_final)
-            
         self.decoder.init_attn_history() # init attn history in decoder for new attention
         
         decoder_outputs, dec_state, attns = \
@@ -1073,8 +1157,206 @@ class HierarchicalModel(nn.Module):
         self.multigpu = multigpu
         super(HierarchicalModel, self).__init__()
         self.context_encoder = context_encoder
-        self.sent_sencoder = sent_encoder
+        self.sent_encoder = sent_encoder
         self.decoder = decoder
+        
+    def hierarchical_encode(self, src, lengths, batch):
+        max_context_length = torch.max(batch.context_lengthes)
+#         print("Model line 1102, context_lengthes", max_context_length)
+#         print("Model line 1103, ssrc size", src.size()) # max_length * batch * 1
+#         print("Model line 1103, batchsize",len(batch))
+#         input("Model line 1101")
+
+        # for test
+        src_vocab = batch.dataset.fields['src'].vocab
+        
+        def get_context(src, context_mask, batch_size, index):
+            # arg
+            # src : length * batch size
+            submask = context_mask == index
+#             print("Model line:1110 submask", submask) # src_len * batch size
+#             print("Model line:1118 context_mask", context_mask.size()) # src_len * batch size
+
+            sub_context = []
+            sub_context_len = torch.sum(submask, 0).long()
+            max_sub_context_len = torch.max(sub_context_len)
+#             print("Model line:1110 submask 0", torch.sum(submask, 0).view(1,-1)) # batch size
+#             print("Model line:1110 submask 1", torch.sum(submask, 1).view(1,-1)) # src length
+#             print("Model line:1117 sum max_sub_context_len", max_sub_context_len) # batch_size
+#             print("Model line:1118 sum submask", submask.long().sum())
+#             print("Model line:1119 mask select", torch.masked_select(src, submask).view(1,-1)) # sum submask
+    
+            selected_context = torch.masked_select(src.squeeze(-1).t(), submask.t())
+#             print("Model line:1123 selected context len", selected_context.size())
+            sub_context = torch.ones(batch_size, max_sub_context_len.data[0]).long()
+#             print("Model line:1124 sub_context", sub_context)
+            accm = 0
+            for i, mask_len in enumerate(sub_context_len): # batch size
+                mask_len = mask_len.data[0]
+#                 print("Model line:1128, mask_len", mask_len)
+                if mask_len == 0:
+                    continue
+                sub_context[i][:mask_len] = selected_context.data[accm:accm + mask_len]
+                accm += mask_len
+#                 print(accm)
+#             print("Model line:1124 sub_context", sub_context.t()) # batch size * max context length
+#             print("Model line:1124 index", index) # batch size * max context length
+    
+            # test for correctly gathered sub context information
+#             for ii in range(batch_size):
+#                 for jj in range(max_sub_context_len.data[0]):
+#                     print(src_vocab.itos[sub_context[ii][jj]], end = ' ')
+#                 print()
+#                 for jj in range(max_sub_context_len.data[0]):
+#                     print(src_vocab.itos[src.data[jj][ii][0]], end = ' ')
+#                 print()                
+#                 for jj in range(max_sub_context_len.data[0]):
+#                     print(context_mask.data[jj][ii], end = ' ')
+#                 print()                
+#                 print()
+            sub_context = Variable(sub_context.t(), requires_grad=False).cuda() # max context length * batch size
+#             input("line:1218")            
+            return sub_context.unsqueeze(2), sub_context_len
+            
+        ####################
+        # sentence encoding
+        ####################   
+    
+        # sentence encoder history
+        sentence_memory_bank = [0] * len(batch)
+        is_empty_sentence_memory_bank = True
+
+        # context encoder input
+        context_inputs = [0] * len(batch)
+        dummy_context_inputs = None
+        
+        for idx in range(max_context_length.data[0]):
+            sub_context, sub_context_len = get_context(src, batch.context_mask, len(batch), idx)    
+            sent_final, sent_memory_bank = self.sent_encoder(sub_context, sub_context_len)
+#             print("Model line:1142 seq final", sent_final) 
+#             print("Model line:1142 seq sent_memory_bank", sent_memory_bank.size()) # nax_sub_context_len * batch * hidden size
+#             print("Model line:1166 seq sub_context_mask", sub_context > 1)
+            
+            sub_context_mask = sub_context != 1 # max_sub_context_len * batch size * emb size
+            selected_sent_context = torch.masked_select(sent_memory_bank.transpose(0,1), sub_context_mask.transpose(0,1)).view(-1, sent_memory_bank.size(2))
+#             print("Model line:1171 seq seleted_sent_context", selected_sent_context) 
+        
+            accm = 0            
+            if dummy_context_inputs is None:
+                dummy_context_inputs = Variable(torch.zeros((1, sent_memory_bank.size(2))), requires_grad=False).cuda()
+#                 print("Model line:1183 dummy_context_inputs", dummy_context_inputs)
+            for i, mask_len in enumerate(sub_context_len): # batch size              
+                mask_len = mask_len.data[0]
+                if mask_len == 0:
+                    context_inputs[i] = torch.cat((context_inputs[i], dummy_context_inputs), 0)
+                    continue
+                
+                if is_empty_sentence_memory_bank:
+                    sentence_memory_bank[i] = selected_sent_context[accm:accm + mask_len]
+                    context_inputs[i] = selected_sent_context[accm + mask_len-1:accm + mask_len]
+#                     print("Model line:1183 sentence_memory bank element size", sentence_memory_bank[i].size())
+#                     print("Model line:1183 context input size", context_inputs[i].size())
+                    
+                else:
+#                     print("Model line:1196 sentence_memory_bank", sentence_memory_bank[i]) 
+#                     print("Model line:1197 sub selected_sent_context", selected_sent_context[accm:accm + mask_len])
+                    sentence_memory_bank[i] = torch.cat((sentence_memory_bank[i], selected_sent_context[accm:accm + mask_len]), 0)
+                    context_inputs[i] = torch.cat((context_inputs[i], selected_sent_context[accm + mask_len-1].unsqueeze(0)), 0)
+                    try:
+                        pass
+                    except:
+                        print("i", idx)
+                        print("i", i)
+                        print("accm", accm)
+                        print("mask_len", mask_len)
+                        print("sub_context", sub_context) # 
+                        print("sub_context_len", sub_context_len)
+                        
+                        print("sent_memory_bank", sent_memory_bank.size())
+                        print("seq seleted_sent_context", selected_sent_context.size()) 
+                        print("0", src_vocab.itos[0])
+                        print("1", src_vocab.itos[1])
+                        print(selected_sent_context)
+                        # test for correctly gathered sub context information
+                        max_sub_context_len = torch.max(sub_context_len)
+                        for ii in range(len(sub_context_len.data)):
+                            print(sub_context.data.transpose(0,1)[ii])
+                            for jj in range(max_sub_context_len.data[0]):
+#                                 print("ii",ii)
+#                                 print("jj",jj)
+                                print(src_vocab.itos[sub_context.data[jj][ii][0]], end = ' ')
+                            print()
+                            for jj in range(max_sub_context_len.data[0]):
+                                print(src_vocab.itos[src.data[jj][ii][0]], end = ' ')
+                            print()                
+                            for jj in range(max_sub_context_len.data[0]):
+                                print(batch.context_mask.data[jj][ii], end = ' ')
+                            print()                
+                            print()                        
+                        input()
+
+                
+#                     print("Model line:1201 sentence_memory bank element size", sentence_memory_bank[i].size())
+#                     print("Model line:1202 context input size", context_inputs[i].size())
+            is_empty_sentence_memory_bank = False
+        
+        # add padding
+        max_origin_length = torch.max(lengths)
+#         print("Model line:1207 max origin length", max_origin_length)
+
+        for i in range(len(batch)):
+            diff = max_origin_length - sentence_memory_bank[i].size(0)
+            if diff == 0:
+                continue
+            dummy_tensor = Variable(torch.zeros((diff, sentence_memory_bank[i].size(1))),  requires_grad=False).cuda()
+#             print("Model line:1211 dummy tensor", dummy_tensor)
+            sentence_memory_bank[i] = torch.cat((sentence_memory_bank[i], dummy_tensor), 0)
+#             print(i, sentence_memory_bank[i].size())
+
+#         for i in range(len(batch)):
+#             print(i, context_inputs[i].size()) # 1 * hidden_size
+#         print("Model line:1193 origin length", lengths)
+#         print("Model line:1193 sentence_memory_bank", torch.stack(sentence_memory_bank))
+#         print("Model line:1193 sentence_memory_bank", torch.stack(context_inputs))
+        sentence_memory_bank = torch.stack(sentence_memory_bank).transpose(0,1)
+        context_inputs = torch.stack(context_inputs).transpose(0,1)
+        
+        ####################
+        # context encoding
+        ####################        
+        
+#         print("Model line:1225 sentence_memory_bank size", sentence_memory_bank.size()) # batch size
+#         print("Model line:1226 context inputs size", context_inputs.size()) # seq_len * batch * hidden
+        
+        # sort context inputs dim for packing
+        sorted_context_lengths, sorted_indices = torch.sort(batch.context_lengthes, descending=True)
+#         print("Model line:1234 context sorted_context_lengths",  sorted_context_lengths)
+#         print("Model line:1235 context sorted_indices",  sorted_indices) # seq_len * batch * hidden
+        
+        sorted_context_inputs = torch.index_select(context_inputs, 1, sorted_indices)
+#         print("Model line:1226 sorted context inputs size", sorted_context_inputs.size())
+
+        _, reversed_indices = torch.sort(sorted_indices, descending=True)
+       
+        # memory_bank : seq_len * batch * hidden
+        # enc_final : (hn, cn) : dir * layer * batch * hidden
+
+        
+        # rearrange dim to original dim
+        context_enc_final, context_memory_bank = self.context_encoder(sorted_context_inputs, sorted_indices)
+        context_memory_bank = torch.index_select(context_memory_bank, 1, reversed_indices)
+        
+        # LSTM
+        if isinstance(context_enc_final, tuple):
+            context_enc_final = (torch.index_select(context_enc_final[0], 1, reversed_indices), torch.index_select(context_enc_final[1], 1, reversed_indices))
+        else: 
+            context_enc_final = torch.index_select(context_enc_final, 1, reversed_indices)
+        
+#         print("Model line:1260 context memory bank",  context_memory_bank)
+#         print("Model line:1261 context enc_final",  context_enc_final) # seq_len * batch * hidden 
+
+        return sentence_memory_bank, context_memory_bank, context_enc_final
+        
 
     def forward(self, src, tgt, lengths, dec_state=None, batch=None):
         """Forward propagate a `src` and `tgt` pair for training.
@@ -1099,69 +1381,44 @@ class HierarchicalModel(nn.Module):
         """
 #         print("model line:602", self.obj_f)
         assert batch is not None
-        max_context_length = torch.max(batch.context_lengthes)
-        print("Model line 1102, context_lengthes", max_context_length)
-        print("Model line 1103, ssrc size", src.size())
-        print("Model line 1103, batchsize",len(batch))
-#         input("Model line 1101")
-        
-        def get_context(src, context_mask, batch_size, index):
-            submask = context_mask == index
-            print("Model line:1110 submask", submask) # src_len * batch size
 
-            sub_context = []
-            sub_context_len = torch.sum(submask, 0).long()
-            max_sub_context_len = torch.max(sub_context_len)
-            print("Model line:1110 submask 0", torch.sum(submask, 0).view(1,-1)) # batch size
-#             print("Model line:1110 submask 1", torch.sum(submask, 1).view(1,-1)) # src length
-#             print("Model line:1117 sum max_sub_context_len", max_sub_context_len) # batch_size
-            print("Model line:1118 sum submask", submask.long().sum())
-#             print("Model line:1119 mask select", torch.masked_select(src, submask).view(1,-1)) # sum submask
+        sentence_memory_bank, context_memory_bank, context_enc_final = self.hierarchical_encode(src, lengths, batch)
+#         print("model line:1344 c m bank", context_memory_bank)
 
-    
-            selected_context = torch.masked_select(src, submask)
-            print("Model line:1123 selected context len", selected_context.size())
-            sub_context = torch.ones(batch_size, max_sub_context_len.data[0]).long()
-            print("Model line:1124 sub_context", sub_context)
-            accm = 0
-            for i, mask_len in enumerate(sub_context_len):
-                mask_len = mask_len.data[0]
-                sub_context[i] = selected_context.data[accm:accm + mask_len]
-                accm += mask_len
-#                 print(accm)
-            print("Model line:1124 sub_context", sub_context)                           
-            
-            input()            
-            return None, None
-            
+        tgt = tgt[:-1]  # exclude last target from inputs        
         
-        for i in range(max_context_length.data[0]):
-            sub_context, sub_context_len = get_context(src, batch.context_mask, len(batch), i)            
-            
-        
-        
-            
-    
-    
-    
-        tgt = tgt[:-1]  # exclude last target from inputs
-
-        enc_final, memory_bank = self.encoder(src, lengths)
         enc_state = \
-            self.decoder.init_decoder_state(src, memory_bank, enc_final)
+            self.decoder.init_decoder_state(src, context_memory_bank, context_enc_final)
             
+        # have been gained
+        # sentence_memory_bank
+            # src_map, context_mask
+        # context_enc_final, context_memory_bank
+            # context_lengthes
+            
+        sentence_memory_length = torch.sum((batch.context_mask >= 0).long(), 0)
+        context_memory_length = batch.context_lengthes
+        
+#         print("model line 1351, sentence_memory_length", sentence_memory_length) # batch size
+#         print("model line 1351, context_memory_length", context_memory_length) # batch size
+
         self.decoder.init_attn_history() # init attn history in decoder for new attention
         
-        decoder_outputs, dec_state, attns = \
-            self.decoder(tgt, memory_bank,
+#(self, tgt, sentence_memory_bank, context_memory_bank, state, sentence_memory_bank, context_memory_bank, state, sentence_memory_lengths, context_memory_lengths, context_mask, idf_weights=None):        
+#         print("model line:1366 c m bank", context_memory_bank)
+        decoder_outputs, dec_state, attns, context_attns = \
+            self.decoder(tgt, sentence_memory_bank, context_memory_bank, 
                          enc_state if dec_state is None
                          else dec_state,
-                         memory_lengths=lengths)
+                         sentence_memory_length,
+                         context_memory_length,
+                         batch.context_mask)
         if self.multigpu:
             # Not yet supported on multi-gpu
             dec_state = None
             attns = None            
             
+        self.context_attns = context_attns
         return decoder_outputs, attns, dec_state
 
     
@@ -1428,3 +1685,5 @@ class RNNDecoderState(DecoderState):
                 for e in self._all]
         self.hidden = tuple(vars[:-1])
         self.input_feed = vars[-1]
+
+        

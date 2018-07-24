@@ -144,7 +144,8 @@ def make_features(batch, side, data_type='text'):
     features = [batch.__dict__[k] for k in keys]
     levels = [data] + features
 
-    if data_type == 'text':
+#     print("IO line:147 data type", data_type)
+    if data_type == 'text' or data_type == "hierarchical_text":
         return torch.cat([level.unsqueeze(2) for level in levels], 2)
     else:
         return levels[0]

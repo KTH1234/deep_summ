@@ -102,7 +102,8 @@ def make_decoder(opt, embeddings):
                                    opt.copy_attn,
                                    opt.dropout,
                                    embeddings,
-                                   opt.reuse_copy_attn)
+                                   opt.reuse_copy_attn,
+                                   opt.model_type )
     elif opt.input_feed:
         return InputFeedRNNDecoder(opt.rnn_type, opt.brnn,
                                    opt.dec_layers, opt.rnn_size,
@@ -172,11 +173,14 @@ def make_base_model(model_opt, fields, gpu, checkpoint=None):
                                          feature_dicts)
         sent_encoder = make_encoder(model_opt, src_embeddings)        
         
-        # because context length is not sorted
+        # because sub context length is not sorted
         sent_encoder.no_pack_padded_seq = True
         context_encoder = ContextEncoder(model_opt.rnn_type, model_opt.brnn, model_opt.enc_layers,
                           model_opt.rnn_size, model_opt.dropout, model_opt.rnn_size,
                           model_opt.bridge)
+        
+        # because sub context length is not sorted
+        context_encoder.no_pack_padded_seq = True
 
     elif model_opt.model_type == "img":
         encoder = ImageEncoder(model_opt.enc_layers,
