@@ -287,10 +287,10 @@ class GlobalAttention(nn.Module):
         # print("gb-attn line:240", (self.linear_out.weight.data*emb_weight.data).size())
         # input()
         
-        print("h attn line:371 c", c.size())
-        print("h attn line:372 input", input.size())
-        print("h attn line:372 c_dec", c_dec.size())
-        input()        
+#         print("h attn line:371 c", c.size())
+#         print("h attn line:372 input", input.size())
+#         print("h attn line:372 c_dec", c_dec.size())
+#         input()        
 
         # concatenate
         concat_c = torch.cat([c, input, c_dec], 2).view(batch*targetL, dim*3)
