@@ -1262,38 +1262,38 @@ class HierarchicalModel(nn.Module):
 #                     print("Model line:1197 sub selected_sent_context", selected_sent_context[accm:accm + mask_len])
                     sentence_memory_bank[i] = torch.cat((sentence_memory_bank[i], selected_sent_context[accm:accm + mask_len]), 0)
                     context_inputs[i] = torch.cat((context_inputs[i], selected_sent_context[accm + mask_len-1].unsqueeze(0)), 0)
-                    try:
-                        pass
-                    except:
-                        print("i", idx)
-                        print("i", i)
-                        print("accm", accm)
-                        print("mask_len", mask_len)
-                        print("sub_context", sub_context) # 
-                        print("sub_context_len", sub_context_len)
+#                     try:
+#                         pass
+#                     except:
+#                         print("i", idx)
+#                         print("i", i)
+#                         print("accm", accm)
+#                         print("mask_len", mask_len)
+#                         print("sub_context", sub_context) # 
+#                         print("sub_context_len", sub_context_len)
                         
-                        print("sent_memory_bank", sent_memory_bank.size())
-                        print("seq seleted_sent_context", selected_sent_context.size()) 
-                        print("0", src_vocab.itos[0])
-                        print("1", src_vocab.itos[1])
-                        print(selected_sent_context)
-                        # test for correctly gathered sub context information
-                        max_sub_context_len = torch.max(sub_context_len)
-                        for ii in range(len(sub_context_len.data)):
-                            print(sub_context.data.transpose(0,1)[ii])
-                            for jj in range(max_sub_context_len.data[0]):
-#                                 print("ii",ii)
-#                                 print("jj",jj)
-                                print(src_vocab.itos[sub_context.data[jj][ii][0]], end = ' ')
-                            print()
-                            for jj in range(max_sub_context_len.data[0]):
-                                print(src_vocab.itos[src.data[jj][ii][0]], end = ' ')
-                            print()                
-                            for jj in range(max_sub_context_len.data[0]):
-                                print(batch.context_mask.data[jj][ii], end = ' ')
-                            print()                
-                            print()                        
-                        input()
+#                         print("sent_memory_bank", sent_memory_bank.size())
+#                         print("seq seleted_sent_context", selected_sent_context.size()) 
+#                         print("0", src_vocab.itos[0])
+#                         print("1", src_vocab.itos[1])
+#                         print(selected_sent_context)
+#                         # test for correctly gathered sub context information
+#                         max_sub_context_len = torch.max(sub_context_len)
+#                         for ii in range(len(sub_context_len.data)):
+#                             print(sub_context.data.transpose(0,1)[ii])
+#                             for jj in range(max_sub_context_len.data[0]):
+# #                                 print("ii",ii)
+# #                                 print("jj",jj)
+#                                 print(src_vocab.itos[sub_context.data[jj][ii][0]], end = ' ')
+#                             print()
+#                             for jj in range(max_sub_context_len.data[0]):
+#                                 print(src_vocab.itos[src.data[jj][ii][0]], end = ' ')
+#                             print()                
+#                             for jj in range(max_sub_context_len.data[0]):
+#                                 print(batch.context_mask.data[jj][ii], end = ' ')
+#                             print()                
+#                             print()                        
+#                         input()
 
                 
 #                     print("Model line:1201 sentence_memory bank element size", sentence_memory_bank[i].size())
