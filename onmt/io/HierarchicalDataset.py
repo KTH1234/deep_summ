@@ -41,6 +41,7 @@ class HierarchicalDataset(ONMTDatasetBase):
     def __init__(self, fields, src_examples_iter, tgt_examples_iter, context_delimiter_char, remove_delimiter,
                  num_src_feats=0, num_tgt_feats=0,
                  src_seq_length=0, tgt_seq_length=0,
+                 src_seq_min_length=0, tgt_seq_min_length=0,
                  dynamic_dict=True, use_filter_pred=True):
         self.data_type = 'hierarchical_text'
         
@@ -106,8 +107,8 @@ class HierarchicalDataset(ONMTDatasetBase):
               len(out_examples))
 
         def filter_pred(example):
-            return 0 < len(example.src) <= src_seq_length \
-               and 0 < len(example.tgt) <= tgt_seq_length
+            return src_seq_min_length < len(example.src) <= src_seq_length \
+               and tgt_seq_min_length < len(example.tgt) <= tgt_seq_length
 
         filter_pred = filter_pred if use_filter_pred else lambda x: True
 
