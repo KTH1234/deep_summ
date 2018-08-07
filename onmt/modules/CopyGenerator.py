@@ -180,6 +180,8 @@ class CopyGeneratorLossCompute(onmt.Loss.LossComputeBase):
 #         print("CopyGenerator line 163",batch.src)
 #         print("CopyGenerator line 164",batch.tgt[range_[0] + 1: range_[1]])
 #         print("CopyGenerator line 165",batch.alignment[range_[0] + 1: range_[1]])
+#         print("CopyGenerator line 165",batch.context_mask)
+#         print("CopyGenerator line 165",batch.src_map)
 #         print("CopyGenerator line 166",type(batch))
 #         print("CopyGenerator line:180 out", output.size())
         

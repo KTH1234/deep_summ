@@ -43,6 +43,7 @@ class HierarchicalDataset(ONMTDatasetBase):
                  src_seq_length=0, tgt_seq_length=0,
                  src_seq_min_length=0, tgt_seq_min_length=0,
                  dynamic_dict=True, use_filter_pred=True):
+        
         self.data_type = 'hierarchical_text'
         
         self.context_delimiter_char = context_delimiter_char
@@ -91,6 +92,7 @@ class HierarchicalDataset(ONMTDatasetBase):
         # function in serialization too, which would cause a problem when
         # `torch.save()`. Thus we materialize it as a list.
         src_size = 0
+        context_len = 0
 
         out_examples = []
         for ex_values in example_values:
@@ -101,9 +103,12 @@ class HierarchicalDataset(ONMTDatasetBase):
             example = self._construct_example_fromlist(
                 ex_values, out_fields)
             src_size += len(example.src)
+            context_len += example.context_lengthes
             out_examples.append(example)
 
         print("average src size", src_size / len(out_examples),
+              len(out_examples))
+        print("avg context len ", src_size / context_len,
               len(out_examples))
 
         def filter_pred(example):
@@ -118,11 +123,14 @@ class HierarchicalDataset(ONMTDatasetBase):
 
     def sort_key(self, ex):
         """ Sort using length of source sentences. """
+        """ Sort using length of conetxt len sentences. """
         # Default to a balanced sort, prioritizing tgt len match.
         # TODO: make this configurable.
         if hasattr(ex, "tgt"):
-            return len(ex.src), len(ex.tgt)
-        return len(ex.src)
+            return ex.context_lengthes, len(ex.tgt)
+#             return len(ex.src), len(ex.tgt)
+        return  ex.context_lengthes
+#         return  len(ex.src)
 
     @staticmethod
     def collapse_copy_scores(scores, batch, tgt_vocab, src_vocabs):
@@ -338,6 +346,17 @@ class HierarchicalDataset(ONMTDatasetBase):
             src = example["src"]
             
             delimiter_indexes = [ idx for idx, word in enumerate(src) if word == self.context_delimiter_char ]
+            # padding last parts
+            if delimiter_indexes[-1] != len(example["src"])-1:
+                diff = len(example["src"]) - 1 - delimiter_indexes[-1] 
+                # add another one punctuation character to last context
+                if diff == 1:
+                    delimiter_indexes[-1] += 1
+                # make new context
+                else:
+                    delimiter_indexes.append(len(example["src"])-1)
+                
+            
             context_mask = [0] * len(example["src"])
             prev_idx = 0
             for context_idx, delimiter_index in enumerate(delimiter_indexes):
@@ -363,11 +382,7 @@ class HierarchicalDataset(ONMTDatasetBase):
 #             input()
             
             yield example
-            
-                                      
-            
 
-       
 
 class ShardedTextCorpusIterator(object):
     """

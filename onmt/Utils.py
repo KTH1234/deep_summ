@@ -1,5 +1,5 @@
 import torch
-
+from torch.autograd import Variable
 
 def aeq(*args):
     """
@@ -26,3 +26,18 @@ def sequence_mask(lengths, max_len=None):
 def use_gpu(opt):
     return (hasattr(opt, 'gpuid') and len(opt.gpuid) > 0) or \
         (hasattr(opt, 'gpu') and opt.gpu > -1)
+
+def pad(tensor, length, pad_index=1):
+    if isinstance(tensor, Variable):
+        var = tensor
+        if length > var.size(0):
+            return torch.cat([var,
+                Variable(pad_index * torch.ones(length - var.size(0), *var.size()[1:])).cuda().type_as(var)])
+        else:
+            return var
+    else:
+        if length > tensor.size(0):
+            return torch.cat([tensor,
+                                  pad_index * torch.ones(length - tensor.size(0), *tensor.size()[1:]).cuda()])
+        else:
+            return tensor      

@@ -374,7 +374,7 @@ class Trainer(object):
                     batch_stats = self.train_loss.sharded_compute_loss(
                             batch, outputs, attns, j,
                             trunc_size, self.shard_size, normalization)
-
+#                     input("trainer line:377")
                     # 4. Update the parameters and statistics.
                     if self.grad_accum_count == 1:
                         self.optim.step()

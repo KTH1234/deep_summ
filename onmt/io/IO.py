@@ -185,7 +185,7 @@ def build_dataset(fields, data_type, src_path, tgt_path, src_dir=None,
                   src_seq_min_length=0, tgt_seq_min_length=0,
                   dynamic_dict=True, sample_rate=0,
                   window_size=0, window_stride=0, window=None,
-                  normalize_audio=True, use_filter_pred=True):
+                  normalize_audio=True, use_filter_pred=True, context_delimiter_char=None, remove_delimiter=None):
 
     # Build src/tgt examples iterator from corpus files, also extract
     # number of features.
@@ -211,14 +211,16 @@ def build_dataset(fields, data_type, src_path, tgt_path, src_dir=None,
                               use_filter_pred=use_filter_pred)
         
     if data_type == 'hierarchical_text':
-        dataset = HierarhicalDataset(fields, src_examples_iter, tgt_examples_iter,
-                              num_src_feats, num_tgt_feats,
-                              src_seq_length=src_seq_length,
-                              tgt_seq_length=tgt_seq_length,
-                              src_seq_min_length=src_seq_min_length,
-                              tgt_seq_min_length=tgt_seq_min_length,                                     
-                              dynamic_dict=dynamic_dict,
-                              use_filter_pred=use_filter_pred)        
+        dataset = HierarchicalDataset(
+                fields, src_examples_iter, tgt_examples_iter,
+                context_delimiter_char, remove_delimiter,
+                num_src_feats, num_tgt_feats,
+                src_seq_length=src_seq_length,
+                tgt_seq_length=tgt_seq_length,
+                src_seq_min_length=src_seq_min_length,
+                tgt_seq_min_length=tgt_seq_min_length,
+                dynamic_dict=dynamic_dict,
+                use_filter_pred=use_filter_pred)            
 
     elif data_type == 'img':
         dataset = ImageDataset(fields, src_examples_iter, tgt_examples_iter,

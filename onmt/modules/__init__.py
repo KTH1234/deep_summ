@@ -1,3 +1,5 @@
+import sys
+
 from onmt.modules.UtilClass import LayerNorm, Elementwise
 from onmt.modules.Gate import context_gate_factory, ContextGate
 from onmt.modules.GlobalAttention import GlobalAttention
@@ -17,7 +19,8 @@ from onmt.modules.Embeddings import Embeddings, PositionalEncoding
 from onmt.modules.WeightNorm import WeightNormConv2d
 from onmt.modules.Reward import Reward
 from onmt.modules.Idf import Idf
-from onmt.modules.allennlp.entailment_scorer import Entailment_scorer
+if not sys.version_info < (3, 6):
+    from onmt.modules.allennlp.entailment_scorer import Entailment_scorer
 from onmt.modules.HierarchicalAttention import HierarchicalAttention
 
 from onmt.Models import EncoderBase, MeanEncoder, StdRNNDecoder, \

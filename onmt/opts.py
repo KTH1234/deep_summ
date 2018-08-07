@@ -418,6 +418,10 @@ def translate_opts(parser):
     group = parser.add_argument_group('Data')
     group.add_argument('-data_type', default="text",
                        help="Type of the source input. Options: [text|img].")
+    group.add_argument('-context_delimiter_char', default="text",
+                       help="""context delimiter character for hierarchical dataset""")
+    group.add_argument('-remove_delimiter', action='store_true',
+                       help="remove delimiter character from training at the hierarhical dataset")   
 
     group.add_argument('-src',   required=True,
                        help="""Source sequence to decode (one line per

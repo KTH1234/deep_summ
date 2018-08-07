@@ -133,6 +133,7 @@ def load_test_model(opt, dummy_opt):
         checkpoint['vocab'], data_type=opt.data_type)
 
     model_opt = checkpoint['opt']
+
     for arg in dummy_opt:
         if arg not in model_opt:
             model_opt.__dict__[arg] = dummy_opt[arg]
@@ -174,13 +175,14 @@ def make_base_model(model_opt, fields, gpu, checkpoint=None):
         sent_encoder = make_encoder(model_opt, src_embeddings)        
         
         # because sub context length is not sorted
-        sent_encoder.no_pack_padded_seq = True
+        # 18.08.03 to modify method
+#         sent_encoder.no_pack_padded_seq = True
         context_encoder = ContextEncoder(model_opt.rnn_type, model_opt.brnn, model_opt.enc_layers,
                           model_opt.rnn_size, model_opt.dropout, model_opt.rnn_size,
                           model_opt.bridge)
         
         # because sub context length is not sorted
-        context_encoder.no_pack_padded_seq = True
+#         context_encoder.no_pack_padded_seq = True
 
     elif model_opt.model_type == "img":
         encoder = ImageEncoder(model_opt.enc_layers,

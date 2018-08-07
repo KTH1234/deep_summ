@@ -8,7 +8,7 @@ from torch.nn.utils.rnn import pack_padded_sequence as pack
 from torch.nn.utils.rnn import pad_packed_sequence as unpack
 
 import onmt
-from onmt.Utils import aeq
+from onmt.Utils import aeq, pad
 
 
 def rnn_factory(rnn_type, **kwargs):
@@ -124,6 +124,7 @@ class RNNEncoder(EncoderBase):
                         num_layers=num_layers,
                         dropout=dropout,
                         bidirectional=bidirectional)
+        print("model line:127 self.no_pack_padded_seq", self.no_pack_padded_seq)
 
         # Initialize the bridge layer
         self.use_bridge = use_bridge
@@ -140,9 +141,10 @@ class RNNEncoder(EncoderBase):
         s_len, batch, emb_dim = emb.size()
         
 #         print("Model line:142, emb size", emb.size())
-
+#         print("Model line:146, lengths", lengths)
         packed_emb = emb
         if lengths is not None and not self.no_pack_padded_seq:
+#             print("Model line:146, emb size", packed_emb.size())
             # Lengths data is wrapped inside a Variable.
             lengths = lengths.view(-1).tolist()
             packed_emb = pack(emb, lengths)
@@ -235,6 +237,7 @@ class ContextEncoder(EncoderBase):
 
         packed_emb = src
         if lengths is not None and not self.no_pack_padded_seq:
+#             print("model line:240, pack")
             # Lengths data is wrapped inside a Variable.
             lengths = lengths.view(-1).tolist()
             packed_emb = pack(src, lengths)
@@ -712,9 +715,9 @@ class HierarchicalInputFeedRNNDecoder(RNNDecoderBase):
             # 18.07.24 thkim
             tgt (`LongTensor`): sequences of padded tokens
                                 `[tgt_len x batch x nfeats]`.
-            sentence_memory_bank (`FloatTensor`): vectors from the each sentence encoder res
+            sentence_memory_bank (`FloatTensor`): vectors from the each sentence encoder res list
                  `[src_len x batch x hidden]`.
-            context_memory_bank (`FloatTensor`): vectors from the context encoder res
+            context_memory_bank (`FloatTensor`): vectors from the context encoder res 
                  `[src_len x batch x hidden]`.
             state (:obj:`onmt.Models.DecoderState`):
                  decoder state object to initialize the decoder
@@ -1159,6 +1162,22 @@ class HierarchicalModel(nn.Module):
         self.context_encoder = context_encoder
         self.sent_encoder = sent_encoder
         self.decoder = decoder
+    
+#     def pad(self, tensor, length, pad_index=1):
+#         if isinstance(tensor, Variable):
+#             var = tensor
+#             if length > var.size(0):
+#                 return torch.cat([var,
+#                                   Variable(pad_index * torch.ones(length - var.size(0), *var.size()[1:])).cuda().type_as(var)])
+#             else:
+#                 return var
+#         else:
+#             if length > tensor.size(0):
+#                 return torch.cat([tensor,
+#                                   pad_index * torch.ones(length - tensor.size(0), *tensor.size()[1:]).cuda()])
+#             else:
+#                 return tensor        
+        
         
     def hierarchical_encode(self, src, lengths, batch):
         max_context_length = torch.max(batch.context_lengthes)
@@ -1170,192 +1189,102 @@ class HierarchicalModel(nn.Module):
         # for test
         src_vocab = batch.dataset.fields['src'].vocab
         
-        def get_context(src, context_mask, batch_size, index):
+        def get_new_context(src, context_mask, context_length):
             # arg
-            # src : length * batch size
-            submask = context_mask == index
-#             print("Model line:1110 submask", submask) # src_len * batch size
-#             print("Model line:1118 context_mask", context_mask.size()) # src_len * batch size
-
-            sub_context = []
-            sub_context_len = torch.sum(submask, 0).long()
-            max_sub_context_len = torch.max(sub_context_len)
-#             print("Model line:1110 submask 0", torch.sum(submask, 0).view(1,-1)) # batch size
-#             print("Model line:1110 submask 1", torch.sum(submask, 1).view(1,-1)) # src length
-#             print("Model line:1117 sum max_sub_context_len", max_sub_context_len) # batch_size
-#             print("Model line:1118 sum submask", submask.long().sum())
-#             print("Model line:1119 mask select", torch.masked_select(src, submask).view(1,-1)) # sum submask
-    
-            selected_context = torch.masked_select(src.squeeze(-1).t(), submask.t())
-#             print("Model line:1123 selected context len", selected_context.size())
-            sub_context = torch.ones(batch_size, max_sub_context_len.data[0]).long()
-#             print("Model line:1124 sub_context", sub_context)
+            # src : length * batch size * 1(variable)
+            # context_mask : length * batch (variable)
+            # context_length : batch (Variable)
+            
+            batch_size = len(context_mask)
+            src_t = src.transpose(0,1).squeeze(2)
+            context_mask_t = context_mask.transpose(0,1)
+            
+            all_sents = [ [ src_t[batch_idx][context_mask_t[batch_idx] == idx] for idx in range(sub_context_len.data[0])] for batch_idx, sub_context_len in enumerate(context_length) ]
+            all_sents_lengths = [ [ sent.size(0) for sent in sents ]  for sents in all_sents ]
+            max_sent_length = max([ max(sents_lengths) for sents_lengths in all_sents_lengths])
+                        
+            # padd with max length
+            all_sents = [ [ pad(sent, max_sent_length) for sent in sents ]  for sents in all_sents ]
+                        
+            '''
+            # test coder for all sents
+            print("model line:1229 len(all_sents)", len(all_sents))
+            print("model line:1264 context_length", context_length)
+            for sents in all_sents:
+                print(len(sents))
             accm = 0
-            for i, mask_len in enumerate(sub_context_len): # batch size
-                mask_len = mask_len.data[0]
-#                 print("Model line:1128, mask_len", mask_len)
-                if mask_len == 0:
-                    continue
-                sub_context[i][:mask_len] = selected_context.data[accm:accm + mask_len]
-                accm += mask_len
-#                 print(accm)
-#             print("Model line:1124 sub_context", sub_context.t()) # batch size * max context length
-#             print("Model line:1124 index", index) # batch size * max context length
-    
-            # test for correctly gathered sub context information
-#             for ii in range(batch_size):
-#                 for jj in range(max_sub_context_len.data[0]):
-#                     print(src_vocab.itos[sub_context[ii][jj]], end = ' ')
-#                 print()
-#                 for jj in range(max_sub_context_len.data[0]):
-#                     print(src_vocab.itos[src.data[jj][ii][0]], end = ' ')
-#                 print()                
-#                 for jj in range(max_sub_context_len.data[0]):
-#                     print(context_mask.data[jj][ii], end = ' ')
-#                 print()                
-#                 print()
-            sub_context = Variable(sub_context.t(), requires_grad=False).cuda() # max context length * batch size
-#             input("line:1218")            
-            return sub_context.unsqueeze(2), sub_context_len
+            
+            for sent, length in zip(all_sents[0], all_sents_lengths[0]):
+                print("model line:1229 src_t[0]", src_t[0][accm:accm+length])
+                print("model line:1229 sent", sent)
+                print("model line:1229 length", length)
+                accm += len(sent)
+                input()
+            '''                       
+            
+            # flat list
+            all_sents = torch.cat([torch.stack(sents) for sents in all_sents ])
+            all_sents_lengths = Variable(torch.LongTensor([ length for lengths in all_sents_lengths for length in lengths ])).cuda()
+
+#             print("model line:1279 all_sents", all_sents) # (sum(context_len) * max_sent_len)
+#             print("model line:1279 all_sents_lengths", all_sents_lengths) # (sum(context_len)
+
+            return all_sents.unsqueeze(2).transpose(0,1), all_sents_lengths
             
         ####################
         # sentence encoding
         ####################   
     
-        # sentence encoder history
-        sentence_memory_bank = [0] * len(batch)
-        is_empty_sentence_memory_bank = True
+        # get entire each sentences
+        # all sents :  (max_sent_len * sum(context_len)) variable
+        # all_sents_lengths : (sum(context_len)) variable
+        all_sents, all_sents_lengths = get_new_context(src, batch.context_mask, batch.context_lengthes)
+        all_sents_lengths = all_sents_lengths.contiguous()
 
-        # context encoder input
-        context_inputs = [0] * len(batch)
-        dummy_context_inputs = None
+        sorted_all_sents_lengths, sorted_indices = torch.sort(all_sents_lengths, descending=True)
+#         sorted_all_sents_lengths, b = torch.sort(all_sents_lengths, descending=True)
+        sorted_all_sents = torch.index_select(all_sents, 1, sorted_indices)
         
-        for idx in range(max_context_length.data[0]):
-            sub_context, sub_context_len = get_context(src, batch.context_mask, len(batch), idx)    
-            sent_final, sent_memory_bank = self.sent_encoder(sub_context, sub_context_len)
-#             print("Model line:1142 seq final", sent_final) 
-#             print("Model line:1142 seq sent_memory_bank", sent_memory_bank.size()) # nax_sub_context_len * batch * hidden size
-#             print("Model line:1166 seq sub_context_mask", sub_context > 1)
-            
-            sub_context_mask = sub_context != 1 # max_sub_context_len * batch size * emb size
-            selected_sent_context = torch.masked_select(sent_memory_bank.transpose(0,1), sub_context_mask.transpose(0,1)).view(-1, sent_memory_bank.size(2))
-#             print("Model line:1171 seq seleted_sent_context", selected_sent_context) 
-        
-            accm = 0            
-            if dummy_context_inputs is None:
-                dummy_context_inputs = Variable(torch.zeros((1, sent_memory_bank.size(2))), requires_grad=False).cuda()
-#                 print("Model line:1183 dummy_context_inputs", dummy_context_inputs)
-            for i, mask_len in enumerate(sub_context_len): # batch size              
-                mask_len = mask_len.data[0]
-                if mask_len == 0:
-                    context_inputs[i] = torch.cat((context_inputs[i], dummy_context_inputs), 0)
-                    continue
+        _, reversed_indices = torch.sort(sorted_indices)
                 
-                if is_empty_sentence_memory_bank:
-                    sentence_memory_bank[i] = selected_sent_context[accm:accm + mask_len]
-                    context_inputs[i] = selected_sent_context[accm + mask_len-1:accm + mask_len]
-#                     print("Model line:1183 sentence_memory bank element size", sentence_memory_bank[i].size())
-#                     print("Model line:1183 context input size", context_inputs[i].size())
-                    
-                else:
-#                     print("Model line:1196 sentence_memory_bank", sentence_memory_bank[i]) 
-#                     print("Model line:1197 sub selected_sent_context", selected_sent_context[accm:accm + mask_len])
-                    sentence_memory_bank[i] = torch.cat((sentence_memory_bank[i], selected_sent_context[accm:accm + mask_len]), 0)
-                    context_inputs[i] = torch.cat((context_inputs[i], selected_sent_context[accm + mask_len-1].unsqueeze(0)), 0)
-#                     try:
-#                         pass
-#                     except:
-#                         print("i", idx)
-#                         print("i", i)
-#                         print("accm", accm)
-#                         print("mask_len", mask_len)
-#                         print("sub_context", sub_context) # 
-#                         print("sub_context_len", sub_context_len)
-                        
-#                         print("sent_memory_bank", sent_memory_bank.size())
-#                         print("seq seleted_sent_context", selected_sent_context.size()) 
-#                         print("0", src_vocab.itos[0])
-#                         print("1", src_vocab.itos[1])
-#                         print(selected_sent_context)
-#                         # test for correctly gathered sub context information
-#                         max_sub_context_len = torch.max(sub_context_len)
-#                         for ii in range(len(sub_context_len.data)):
-#                             print(sub_context.data.transpose(0,1)[ii])
-#                             for jj in range(max_sub_context_len.data[0]):
-# #                                 print("ii",ii)
-# #                                 print("jj",jj)
-#                                 print(src_vocab.itos[sub_context.data[jj][ii][0]], end = ' ')
-#                             print()
-#                             for jj in range(max_sub_context_len.data[0]):
-#                                 print(src_vocab.itos[src.data[jj][ii][0]], end = ' ')
-#                             print()                
-#                             for jj in range(max_sub_context_len.data[0]):
-#                                 print(batch.context_mask.data[jj][ii], end = ' ')
-#                             print()                
-#                             print()                        
-#                         input()
-
-                
-#                     print("Model line:1201 sentence_memory bank element size", sentence_memory_bank[i].size())
-#                     print("Model line:1202 context input size", context_inputs[i].size())
-            is_empty_sentence_memory_bank = False
-        
-        # add padding
-        max_origin_length = torch.max(lengths)
-#         print("Model line:1207 max origin length", max_origin_length)
-
-        for i in range(len(batch)):
-            diff = max_origin_length - sentence_memory_bank[i].size(0)
-            if diff == 0:
-                continue
-            dummy_tensor = Variable(torch.zeros((diff, sentence_memory_bank[i].size(1))),  requires_grad=False).cuda()
-#             print("Model line:1211 dummy tensor", dummy_tensor)
-            sentence_memory_bank[i] = torch.cat((sentence_memory_bank[i], dummy_tensor), 0)
-#             print(i, sentence_memory_bank[i].size())
-
-#         for i in range(len(batch)):
-#             print(i, context_inputs[i].size()) # 1 * hidden_size
-#         print("Model line:1193 origin length", lengths)
-#         print("Model line:1193 sentence_memory_bank", torch.stack(sentence_memory_bank))
-#         print("Model line:1193 sentence_memory_bank", torch.stack(context_inputs))
-        sentence_memory_bank = torch.stack(sentence_memory_bank).transpose(0,1)
-        context_inputs = torch.stack(context_inputs).transpose(0,1)
-        
-        ####################
-        # context encoding
-        ####################        
-        
-#         print("Model line:1225 sentence_memory_bank size", sentence_memory_bank.size()) # batch size
-#         print("Model line:1226 context inputs size", context_inputs.size()) # seq_len * batch * hidden
-        
-        # sort context inputs dim for packing
-        sorted_context_lengths, sorted_indices = torch.sort(batch.context_lengthes, descending=True)
-#         print("Model line:1234 context sorted_context_lengths",  sorted_context_lengths)
-#         print("Model line:1235 context sorted_indices",  sorted_indices) # seq_len * batch * hidden
-        
-        sorted_context_inputs = torch.index_select(context_inputs, 1, sorted_indices)
-#         print("Model line:1226 sorted context inputs size", sorted_context_inputs.size())
-
-        _, reversed_indices = torch.sort(sorted_indices, descending=True)
-       
-        # memory_bank : seq_len * batch * hidden
-        # enc_final : (hn, cn) : dir * layer * batch * hidden
-
-        
-        # rearrange dim to original dim
-        context_enc_final, context_memory_bank = self.context_encoder(sorted_context_inputs, sorted_indices)
-        context_memory_bank = torch.index_select(context_memory_bank, 1, reversed_indices)
+        sent_final, sent_memory_bank = self.sent_encoder(sorted_all_sents, sorted_all_sents_lengths.data)
         
         # LSTM
-        if isinstance(context_enc_final, tuple):
-            context_enc_final = (torch.index_select(context_enc_final[0], 1, reversed_indices), torch.index_select(context_enc_final[1], 1, reversed_indices))
-        else: 
-            context_enc_final = torch.index_select(context_enc_final, 1, reversed_indices)
+        if isinstance(sent_final, tuple):
+            sent_final = sent_final[0]            
+                
+        if self.sent_encoder.rnn.bidirectional:
+            compression = lambda h:torch.cat([h[0:h.size(0):2], h[1:h.size(0):2]], 2)
+            sent_final = compression(sent_final)                        
         
-#         print("Model line:1260 context memory bank",  context_memory_bank)
-#         print("Model line:1261 context enc_final",  context_enc_final) # seq_len * batch * hidden 
+        # sent_final : 1 * sum(context_len) * hidden
+        # sent_memory_bank : max_sent_len * sum(context_len) * hidden        
+        sent_memory_bank = torch.index_select(sent_memory_bank, 1, reversed_indices) 
+        sent_final = torch.index_select(sent_final, 1, reversed_indices)                       
+                    
+#         print("Model line:1308 sent_memory_bank", sent_memory_bank)
+#         print("Model line:1309 sent_final", sent_final) # 1 * batch * hidden       
+#        print("Model line:1308 sent_memory_bank size", sent_memory_bank.size())
+#        print("Model line:1309 sent_final size", sent_final.size()) # 1 * batch * hidden   
 
-        return sentence_memory_bank, context_memory_bank, context_enc_final
+        # assume batch is sorted by ocntext length
+        context_start_index = torch.cumsum(batch.context_lengthes, 0)
+        context_start_index.data[-1] = 0
+        context_start_index, _ = context_start_index.sort()
+         
+        context_inputs = torch.stack([ pad(sent_final.squeeze(0).narrow(0, s, l), max_context_length.data[0]) for s, l in zip(context_start_index.data, batch.context_lengthes.data) ])
+        context_inputs = context_inputs.transpose(0,1)
+#         print("model line:1341, context_inputs", context_inputs.size())
+        
+        # context_enc_final : dir * batch * hidden
+        # context_memory_bank : max_context_len * batch * hidden     
+        context_enc_final, context_memory_bank = self.context_encoder(context_inputs, batch.context_lengthes.data)
+        
+#         print("Model line:1308 context_memory_bank", context_memory_bank) # max_context_len * batch * hidden
+#         print("Model line:1309 context_enc_final", context_enc_final) # 1 * batch * hidden          
+        
+
+        return sent_memory_bank, all_sents_lengths, context_memory_bank, context_enc_final
         
 
     def forward(self, src, tgt, lengths, dec_state=None, batch=None):
@@ -1382,7 +1311,7 @@ class HierarchicalModel(nn.Module):
 #         print("model line:602", self.obj_f)
         assert batch is not None
 
-        sentence_memory_bank, context_memory_bank, context_enc_final = self.hierarchical_encode(src, lengths, batch)
+        sent_memory_history, sent_memory_length_history, context_memory_bank, context_enc_final = self.hierarchical_encode(src, lengths, batch)
 #         print("model line:1344 c m bank", context_memory_bank)
 
         tgt = tgt[:-1]  # exclude last target from inputs        
@@ -1396,7 +1325,7 @@ class HierarchicalModel(nn.Module):
         # context_enc_final, context_memory_bank
             # context_lengthes
             
-        sentence_memory_length = torch.sum((batch.context_mask >= 0).long(), 0)
+#         sentence_memory_length = torch.sum((batch.context_mask >= 0).long(), 0)
         context_memory_length = batch.context_lengthes
         
 #         print("model line 1351, sentence_memory_length", sentence_memory_length) # batch size
@@ -1407,10 +1336,10 @@ class HierarchicalModel(nn.Module):
 #(self, tgt, sentence_memory_bank, context_memory_bank, state, sentence_memory_bank, context_memory_bank, state, sentence_memory_lengths, context_memory_lengths, context_mask, idf_weights=None):        
 #         print("model line:1366 c m bank", context_memory_bank)
         decoder_outputs, dec_state, attns, context_attns = \
-            self.decoder(tgt, sentence_memory_bank, context_memory_bank, 
+            self.decoder(tgt, sent_memory_history, context_memory_bank, 
                          enc_state if dec_state is None
                          else dec_state,
-                         sentence_memory_length,
+                         sent_memory_length_history,
                          context_memory_length,
                          batch.context_mask)
         if self.multigpu:
@@ -1418,6 +1347,7 @@ class HierarchicalModel(nn.Module):
             dec_state = None
             attns = None            
             
+#         input("model line::1440")
         self.context_attns = context_attns
         return decoder_outputs, attns, dec_state
 

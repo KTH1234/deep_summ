@@ -37,7 +37,14 @@ def make_translator(opt, report_score=True, out_file=None):
               for k in ["beam_size", "n_best", "max_length", "min_length",
                         "stepwise_penalty", "block_ngram_repeat",
                         "ignore_when_blocking", "dump_beam",
-                        "data_type", "replace_unk", "gpu", "verbose", "idf_attn_weight"]}
+                        "data_type", "replace_unk", "gpu", "verbose"]}
+    if "idf_attn_weight" in opt:
+        kwargs["idf_attn_weight"] = getattr(opt, "idf_attn_weight")
+    if "remove_delimiter" in opt:
+        kwargs["remove_delimiter"] = getattr(opt, "remove_delimiter")        
+    if "context_delimiter_char" in opt:
+        kwargs["context_delimiter_char"] = getattr(opt, "context_delimiter_char")                
+    
 
     translator = Translator(model, fields, global_scorer=scorer,
                             out_file=out_file, report_score=report_score,
@@ -90,7 +97,9 @@ class Translator(object):
                  report_rouge=False,
                  verbose=False,
                  out_file=None,
-                 idf_attn_weight=False
+                 idf_attn_weight=False,
+                 context_delimiter_char=None,
+                 remove_delimiter=False,
                  
                 ):
         self.gpu = gpu
@@ -121,6 +130,8 @@ class Translator(object):
         self.report_bleu = report_bleu
         self.report_rouge = report_rouge
         self.idf_attn_weight = idf_attn_weight
+        self.context_delimiter_char = context_delimiter_char
+        self.remove_delimiter = remove_delimiter
         
         # hardcoded to load idf value
         if self.idf_attn_weight:
@@ -168,7 +179,9 @@ class Translator(object):
                                      window_size=self.window_size,
                                      window_stride=self.window_stride,
                                      window=self.window,
-                                     use_filter_pred=self.use_filter_pred)
+                                     use_filter_pred=self.use_filter_pred,
+                                     context_delimiter_char = self.context_delimiter_char,
+                                     remove_delimiter = self.remove_delimiter)
 
         data_iter = onmt.io.OrderedIterator(
             dataset=data, device=self.gpu,
@@ -213,7 +226,8 @@ class Translator(object):
             if len(batch) == 1: # assume demo page
                 oov_info = check_oov(batch, self.fields["src"].vocab)
 
-            batch_data = self.translate_batch(batch, data)
+#             print("Translator line:219 model_type", self.model.model_type)
+            batch_data = self.translate_batch(batch, data, self.model.model_type)
             translations = builder.from_batch(batch_data)
 
             for trans in translations:
@@ -235,8 +249,8 @@ class Translator(object):
                     os.write(1, output.encode('utf-8'))
 
                 # Debug attention.
-                #print("Translator line:182 attn", trans.attns[0])
-                #print("Translator line:182 attn sum", torch.sum(trans.attns[0],0).view(1,-1))
+#                 print("Translator line:182 attn", trans.attns[0].size())
+#                 print("Translator line:182 attn sum", torch.sum(trans.attns[0],0).view(1,-1))
 #                 print("Translator line:182 copy", trans.copys[0]) # batch size * 1
 #                 print("Translator line:183 trans.src_raw", len(trans.src_raw))
 
@@ -284,7 +298,7 @@ class Translator(object):
                       codecs.open(self.dump_beam, 'w', 'utf-8'))
         return all_scores, attns_info, oov_info, copy_info
 
-    def translate_batch(self, batch, data):
+    def translate_batch(self, batch, data, model_type):
         """
         Translate a batch of sentences.
 
@@ -293,6 +307,7 @@ class Translator(object):
         Args:
            batch (:obj:`Batch`): a batch from a dataset object
            data (:obj:`Dataset`): the dataset object
+           model_type (str) : type of model
 
 
         Todo:
@@ -337,12 +352,38 @@ class Translator(object):
         # (1) Run the encoder on the src.
         src = onmt.io.make_features(batch, 'src', data_type)
         src_lengths = None
-        if data_type == 'text':
+        if data_type == 'text' or self.data_type == "hierarchical_text":
             _, src_lengths = batch.src
+#             print(src_lengths) # text -> tensor
+            
 
-        enc_states, memory_bank = self.model.encoder(src, src_lengths)
-        dec_states = self.model.decoder.init_decoder_state(
-            src, memory_bank, enc_states)
+
+#         print("Translator line:348 model_type", model_type)
+        if model_type == "text":        
+            enc_states, memory_bank = self.model.encoder(src, src_lengths)
+            dec_states = self.model.decoder.init_decoder_state(
+                src, memory_bank, enc_states)
+            memory_bank = rvar(memory_bank.data)
+            memory_lengths = src_lengths.repeat(beam_size)
+        elif model_type == "hierarchical_text":
+            sentence_memory_bank, sent_memory_length_history, context_memory_bank, context_enc_final = self.model.hierarchical_encode(src, src_lengths, batch)
+
+            dec_states = \
+                self.model.decoder.init_decoder_state(src, context_memory_bank, context_enc_final)
+
+            sentence_memory_length = sent_memory_length_history
+            context_memory_length = batch.context_lengthes
+            
+            sentence_memory_bank = rvar(sentence_memory_bank.data)
+            context_memory_bank = rvar(context_memory_bank.data)
+            sentence_memory_length = sentence_memory_length.repeat(beam_size) # variable
+            context_memory_length = context_memory_length.repeat(beam_size)
+            context_mask = batch.context_mask.repeat(1, beam_size)
+            global_sentence_memory_length = torch.sum((batch.context_mask >= 0).long(), 0)
+            global_sentence_memory_length = global_sentence_memory_length.repeat(beam_size)
+            
+#             print("Translator line:377 batch.context_mask", batch.context_mask)
+#             print("Translator line:377 sentence_momory_length", sentence_memory_length)
         
 #         print("Translator line:338 src", src) # src_len * batch * 1
 #         print("Translator line:339 memory_bank", memory_bank) # src len * batch * hidden
@@ -373,9 +414,8 @@ class Translator(object):
 
         # (2) Repeat src objects `beam_size` times.
         src_map = rvar(batch.src_map.data) \
-            if data_type == 'text' and self.copy_attn else None
-        memory_bank = rvar(memory_bank.data)
-        memory_lengths = src_lengths.repeat(beam_size)
+            if (data_type == 'text' or data_type == 'hierarchical_text') and self.copy_attn else None
+
         dec_states.repeat_beam_size_times(beam_size)        
         
 #         print("Translator line:338 src", src)
@@ -411,9 +451,26 @@ class Translator(object):
 #             input()
 
             # Run one step.
-            dec_out, dec_states, attn = self.model.decoder(
-                inp, memory_bank, dec_states, memory_lengths=memory_lengths, idf_weights=idf_attn_weights)
-            dec_out = dec_out.squeeze(0)
+            if model_type == "text":
+                dec_out, dec_states, attn = self.model.decoder(
+                    inp, memory_bank, dec_states, memory_lengths=memory_lengths, idf_weights=idf_attn_weights)
+                dec_out = dec_out.squeeze(0)
+#                 print("translator line:456 attn", attn["std"].size()) 
+#                 print("translator line:456 unbottle(attn)", unbottle(attn["std"]).size())                 
+            elif model_type == "hierarchical_text":
+                dec_out, dec_states, attn, context_attns = \
+                    self.model.decoder(inp, sentence_memory_bank, context_memory_bank, 
+                                 dec_states,
+                                 sentence_memory_length,
+                                 context_memory_length,
+                                 context_mask)
+#                 print("translator line:456 dec_out", dec_out.size()) 1 * (batch*beam) * hidden
+#                 print("translator line:456 attn", attn["std"].size()) 
+#                 print("translator line:456 unbottle(attn)", unbottle(attn["std"]).size()) 
+                dec_out = dec_out.squeeze(0)
+
+            # to do handle context_attn information
+#                 self.model.context_attns = context_attns                
             # dec_out: beam x rnn_size
             
             
@@ -444,6 +501,10 @@ class Translator(object):
 #             print("Translator line:353 unbottle p_copy", unbottle(p_copy)) # beam, batch, 1
 #             print("Translator line:353 out", out)
 #             input()
+            if  model_type == "hierarchical_text":
+                memory_lengths = global_sentence_memory_length.data
+#                 print("translator line:504 memory_lengths", memory_lengths) 
+
             for j, b in enumerate(beam):
                 if not self.copy_attn:
                         b.advance(out[:, j],
@@ -491,7 +552,7 @@ class Translator(object):
 
     def _run_target(self, batch, data):
         data_type = data.data_type
-        if data_type == 'text':
+        if data_type == 'text' or data_type == "hierarchical_text":
             _, src_lengths = batch.src
         else:
             src_lengths = None
