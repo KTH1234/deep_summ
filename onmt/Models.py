@@ -756,6 +756,8 @@ class HierarchicalInputFeedRNNDecoder(RNNDecoderBase):
         decoder_outputs = torch.stack(decoder_outputs)
         for k in attns:
             attns[k] = torch.stack(attns[k])
+        for k in context_attns:
+            context_attns[k] = torch.stack(context_attns[k])            
 
         return decoder_outputs, state, attns, context_attns    
     
@@ -817,6 +819,8 @@ class HierarchicalInputFeedRNNDecoder(RNNDecoderBase):
             rnn_output, hidden = self.rnn(decoder_input, hidden)
 #             print("model line 508 before attn")
 #             print("model line:815 decoder rnn output", rnn_output) # batch * hidden
+
+
 
 
             decoder_output, p_attn, context_attn = self.attn(
@@ -933,6 +937,10 @@ class NMTModel(nn.Module):
 #         print("model line:602", self.obj_f)
         tgt = tgt[:-1]  # exclude last target from inputs
        
+#         if torch.sum(enc_final != enc_final).data[0] != 0:
+#             print("model line:938 enc_final",enc_final) #        
+#             print("model line:939 memory_bank",memory_bank) #        
+        
         
         enc_final, memory_bank = self.encoder(src, lengths)
         enc_state = \
@@ -1020,7 +1028,8 @@ class NMTModel(nn.Module):
 
             # Turn any copied words to UNKs
             # 0 is unk
-            if self.decoder._copy or self.decoder.copy_attn:
+#             if self.decoder._copy or self.decoder.copy_attn:
+            if self.decoder._copy:
                 inp = inp.masked_fill(
                     inp.gt(len(batch.dataset.fields['tgt'].vocab) - 1), 0)
 #             inp = inp.unsqueeze(2)             
@@ -1033,11 +1042,14 @@ class NMTModel(nn.Module):
             # dec_out: beam x rnn_size                    
 
             # (b) Compute a vector of batch x beam word scores.
-            if not self.decoder._copy and not self.decoder.copy_attn:
+#           if not self.decoder._copy and not self.decoder.copy_attn:
+            if not self.decoder._copy:
                 out = self.generator.forward(dec_out).data
-                out = unbottle(out)
+#                 print("model line 1048: output size", out.size())
+#                 input()
+#                 out = unbottle(out)
                 # beam x tgt_vocab
-                beam_attn = unbottle(attn["std"])
+#                 beam_attn = unbottle(attn["std"])
             else:
                 out = self.generator.forward(dec_out,
                                                    attn["copy"].squeeze(0),
@@ -1141,6 +1153,7 @@ class NMTModel(nn.Module):
     #         probs = torch.stack(probs)
         out_indices = torch.stack(out_indices)
 #         print("model line 770 probx, out_indices", probs.size(), out_indices.size()) # tgt_len * batch size
+#         print("model line 770 out_indices", out_indices.size()) # tgt_len * batch size
 #         input("model line:771")
     
 #         return decoder_outputs, attns, dec_states, probs, out_indices
@@ -1249,6 +1262,8 @@ class HierarchicalModel(nn.Module):
                 
         sent_final, sent_memory_bank = self.sent_encoder(sorted_all_sents, sorted_all_sents_lengths.data)
         
+
+        
         # LSTM
         if isinstance(sent_final, tuple):
             sent_final = sent_final[0]            
@@ -1282,7 +1297,14 @@ class HierarchicalModel(nn.Module):
         
 #         print("Model line:1308 context_memory_bank", context_memory_bank) # max_context_len * batch * hidden
 #         print("Model line:1309 context_enc_final", context_enc_final) # 1 * batch * hidden          
-        
+        if torch.sum(sent_final != sent_final).data[0] != 0:
+            print("model line:938 sent_final",sent_final) #        
+            print("model line:939 sent_memory_bank",sent_memory_bank) # 
+            print("model line:939 all_sents",all_sents) #
+            
+        if torch.sum(context_enc_final[0] != context_enc_final[0]).data[0] != 0:
+            print("model line:938 context_enc_final",context_enc_final) #        
+            print("model line:939 context_memory_bank",context_memory_bank) #             
 
         return sent_memory_bank, all_sents_lengths, context_memory_bank, context_enc_final
         
@@ -1349,7 +1371,7 @@ class HierarchicalModel(nn.Module):
             
 #         input("model line::1440")
         self.context_attns = context_attns
-        return decoder_outputs, attns, dec_state
+        return decoder_outputs, attns, dec_state, 
 
     
     def sample(self, src, tgt, lengths, dec_states=None, batch=None, mode="sample", eos_index=3):

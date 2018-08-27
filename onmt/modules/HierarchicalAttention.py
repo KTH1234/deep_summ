@@ -222,7 +222,8 @@ class HierarchicalAttention(nn.Module):
         align = torch.exp(align) # batch * 1(target_length) * input_length
 #         print("globalattn line 203: align")
 
-        align_vectors = self.logsm(align.view(batch*targetL, sourceL))
+#         align_vectors = self.logsm(align.view(batch*targetL, sourceL))
+        align_vectors = self.sm(align.view(batch*targetL, sourceL))
         align_vectors = align_vectors.view(batch, targetL, sourceL)
 #         if len(attn_outputs) < 1: # t=1
 # #             print("global attn line:208, attn_outputs")
@@ -363,11 +364,38 @@ class HierarchicalAttention(nn.Module):
         
         # select real context position in mask
         # flatten_context_align_vector : sum(context_length)
+        
+#        if input != input:
+#            print("hiera attn line:324 nan input", input) # batch * 1 * sent lenz
+        
         flatten_context_align_vector = context_align_vector.squeeze(1)[context_attn_mask == 1]
                 
         # calculate last attn
-        sent_align_vectors = sent_align_vectors + flatten_context_align_vector.view(-1,1,1)
-        sent_align_vectors = self.sm(sent_align_vectors.squeeze(1)).unsqueeze(1)
+#         sent_align_vectors = sent_align_vectors + flatten_context_align_vector.view(-1,1,1)
+        sent_align_vectors = sent_align_vectors * flatten_context_align_vector.view(-1,1,1)
+#        print("hiera attn line:324 sent_align_vector", sent_align_vectors) # batch * 1 * sent lenz
+#        input()        
+        # pad
+#         if sentence_memory_lengths is not None:
+#             mask = sequence_mask(sentence_memory_lengths.data)
+#             mask = mask.unsqueeze(1)  # Make it broadcastable.
+
+        if torch.sum(sent_align_vectors != sent_align_vectors).data[0] != 0:
+            print("hiera attn line:387 sent_align_vectors",sent_align_vectors) #
+        
+        # prev 18-08-17
+#         sent_align_vectors = self.sm(sent_align_vectors.squeeze(1)).unsqueeze(1)
+        
+        if torch.sum(sent_align_vectors != sent_align_vectors).data[0] != 0:
+            print("hiera attn line:385 context_memory_bank",context_memory_bank) #
+            print("hiera attn line:386 sentence_memory_bank",sentence_memory_bank) #
+            print("hiera attn line:387 input",input) #
+            print("hiera attn line:387 sent_align_vectors",sent_align_vectors) #
+            print("hiera attn line:387 context_align_vector",context_align_vector) #
+            
+            if torch.sum(context_align_vector != context_align_vector).data[0] != 0:
+                print("hiera attn line:387 context_align_vector contains nan") #
+            input()
         
 #        print("hiera attn line:322 context_memory_bank",context_memory_bank) # batch * 1 * context len
 #        print("hiera attn line:322 flatten_context_align_vector",flatten_context_align_vector) # batch * 1 * context len
@@ -410,10 +438,13 @@ class HierarchicalAttention(nn.Module):
         sent_start_index = torch.cumsum(torch.cat([torch.zeros(1).long().cuda(), sub_global_sent_memory_length.data]), 0)
 #         print("hiera attn line:394 sent_start_index", sent_start_index) # batch
          
-        flatten_sent_align_vector = torch.stack([ pad(flatten_sent_align_vector.narrow(0, s, l), max_sentence_length.data[0], pad_index=0) for s, l in zip(sent_start_index, global_sentence_memory_length.data) ]).unsqueeze(1)
+        flatten_sent_align_vector = torch.stack([ pad(flatten_sent_align_vector.narrow(0, s, l), max_sentence_length.data[0], pad_index=-float('inf')) for s, l in zip(sent_start_index, global_sentence_memory_length.data) ]).unsqueeze(1)
         flatten_sent_memory_vector = torch.stack([ pad(flatten_sent_memory_vector.narrow(0, s, l), max_sentence_length.data[0]) for s, l in zip(sent_start_index, global_sentence_memory_length.data) ])
 #         print("hiera attn line:391 flatten_sent_align_vector", flatten_sent_align_vector.size()) # batch * 1 * max_src_len
 #         print("hiera attn line:391 flatten_sent_memory_vector", flatten_sent_memory_vector.size()) # batch * * max_src_len * dim
+
+        flatten_sent_align_vector = self.sm(flatten_sent_align_vector.squeeze(1)).unsqueeze(1)        
+    
         sent_align_vector = flatten_sent_align_vector
         batch, sourceL, dim = flatten_sent_memory_vector.size()
 #         batch, sourceL, dim = sentence_memory_bank.size()

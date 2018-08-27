@@ -73,12 +73,13 @@ class Statistics(object):
            start (int): start time of epoch.
         """
         t = self.elapsed_time()
-        print(("Epoch %2d, %5d/%5d; acc: %6.2f; ppl: %6.2f; xent: %6.2f; " +
-               "%3.0f src tok/s; %3.0f tgt tok/s; %6.0f s elapsed") %
+        print(("Epoch %2d, %5d/%5d; acc: %6.2f; ppl: %6.2f; xent: %6.2f; loss: %3.0f; " +
+               "%3.0f; src tok/s; %3.0f tgt tok/s; %6.0f s elapsed") %
               (epoch, batch,  n_batches,
                self.accuracy(),
                self.ppl(),
                self.xent(),
+               self.loss,
                self.n_src_words / (t + 1e-5),
                self.n_words / (t + 1e-5),
                time.time() - start))
@@ -389,6 +390,8 @@ class Trainer(object):
                     # 2. F-prop all but generator.
                     if self.grad_accum_count == 1:
                         self.model.zero_grad()
+                        
+#                     print("trainer line:394 copy", self.model.decoder._copy)
     
                     outputs, attns, dec_state, out_indices = \
                         self.model.sample(src, tgt, src_lengths, dec_state, batch, "sample")
@@ -397,7 +400,7 @@ class Trainer(object):
                     _, _, sec_dec_state, max_out_indices = \
                         self.model.sample(src, tgt, src_lengths, sec_dec_state, batch, "greedy")                        
                       
-                    batch_scores, sample_scores, max_scores, sample_alignments = self.reward.get_batch_reward(batch, out_indices, max_out_indices)
+                    batch_scores, sample_scores, max_scores, sample_alignments = self.reward.get_batch_reward(batch, out_indices, max_out_indices, self.model.decoder._copy)
 #                     print("trainer line:371 batch_scores", batch_scores)
                     batch_scores = batch_scores.expand(out_indices.size(0),batch_scores.size(0))
 #                     print("trainer line:398 batch_scores", batch_scores)
@@ -496,7 +499,7 @@ class Trainer(object):
                     _, _, max_sample_dec_state, max_out_indices = \
                         self.model.sample(src, tgt, src_lengths, max_sample_dec_state, batch, "greedy")                        
                       
-                    batch_scores, sample_scores, max_scores, sample_alignments = self.reward.get_batch_reward(batch, out_indices, max_out_indices)
+                    batch_scores, sample_scores, max_scores, sample_alignments = self.reward.get_batch_reward(batch, out_indices, max_out_indices, self.model.decoder._copy)
                     batch_scores = batch_scores.expand(out_indices.size(0),batch_scores.size(0))
 
                     sample_batch_tgt = batch.tgt.clone()
@@ -508,6 +511,7 @@ class Trainer(object):
                         batch_stats = self.train_loss.sharded_compute_loss(
                             batch, outputs, sample_outputs, attns, sample_attns, sample_batch_tgt, sample_batch_alignment, j,
                             trunc_size, self.shard_size, normalization, rewards=Variable(batch_scores, requires_grad=False).cuda())
+                        
 
                     # 4. Update the parameters and statistics.
                         if self.grad_accum_count == 1:
@@ -529,6 +533,7 @@ class Trainer(object):
                         print("Trainer line:438 outputs", outputs.size())
                         print("Trainer line:439 batch alignment", batch.alignment.size()) 
                         sys.exit(1)
+                torch.nn.utils.clip_grad_norm(self.model.parameters(),2)
                     
                     
         if self.grad_accum_count > 1:

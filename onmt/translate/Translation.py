@@ -50,21 +50,25 @@ class TranslationBuilder(object):
         assert(len(translation_batch["gold_score"]) ==
                len(translation_batch["predictions"]))
         batch_size = batch.batch_size
+        
+        assert "context_attention" in translation_batch
 
         if "copy" in translation_batch:
-            preds, pred_score, attn, copy, gold_score, indices = list(zip(
+            preds, pred_score, attn, copy, context_attn, gold_score, indices = list(zip(
                 *sorted(zip(translation_batch["predictions"],
                         translation_batch["scores"],
                         translation_batch["attention"],
                         translation_batch["copy"],
+                        translation_batch["context_attention"],
                         translation_batch["gold_score"],
                         batch.indices.data),
                     key=lambda x: x[-1])))
         else:
-            preds, pred_score, attn, gold_score, indices = list(zip(
+            preds, pred_score, attn, context_attn, gold_score, indices = list(zip(
                 *sorted(zip(translation_batch["predictions"],
                         translation_batch["scores"],
                         translation_batch["attention"],
+                        translation_batch["context_attention"],
                         translation_batch["gold_score"],
                         batch.indices.data),
                     key=lambda x: x[-1])))       
@@ -107,7 +111,8 @@ class TranslationBuilder(object):
             translation = Translation(src[:, b] if src is not None else None,
                                       src_raw, pred_sents,
                                       attn[b], pred_score[b], gold_sent,
-                                      gold_score[b], copy=copy if len(copy) != 0 else None)
+                                      gold_score[b], copy=copy if len(copy) != 0 else None, 
+                                      context_attn=context_attn if len(context_attn) != 0 else None)
             translations.append(translation)
 
         return translations
@@ -129,12 +134,13 @@ class Translation(object):
 
     """
     def __init__(self, src, src_raw, pred_sents,
-                 attn, pred_scores, tgt_sent, gold_score, copy=None):
+                 attn, pred_scores, tgt_sent, gold_score, copy=None, context_attn=None):
         self.src = src
         self.src_raw = src_raw
         self.pred_sents = pred_sents
         self.attns = attn
         self.copys = copy
+        self.context_attns = context_attn
         self.pred_scores = pred_scores
         self.gold_sent = tgt_sent
         self.gold_score = gold_score

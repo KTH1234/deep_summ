@@ -23,7 +23,7 @@ class Reward():
         self.eps = -1e-5
         self.error = 0
         
-    def get_rouge_reward(self, batch, sample_indices, max_indices):
+    def get_rouge_reward(self, batch, sample_indices, max_indices, copy):
 #         print("Reward line:5 sample indices", sample_indices) # tgt_len * batch
 #         print("Reward line:5 max indices", max_indices) # tgt_len * batch
 #         print("rweard line:7 sample_indeices[:,0]", sample_indices[:,0])
@@ -31,6 +31,7 @@ class Reward():
 #         print("rweard line:21 batch", batch.tgt)
         
         tgt_vocab = batch.dataset.fields['tgt'].vocab
+        global_vocab = batch.dataset.fields['src'].vocab
 #         print("batch src")
 #         print(batch.src)
 #         input()
@@ -45,7 +46,7 @@ class Reward():
 #             print("Reward line:11 in batch index",in_batch_index)
 #             print("Reward line:29 in raw example", len(batch.dataset.examples))
 #             print("Reward line:30 batch dataset fileds tgt", batch.dataset.fields['tgt'])
-            src_vocab = batch.dataset.src_vocabs[in_batch_index]
+            src_vocab = batch.dataset.src_vocabs[in_batch_index] if copy else global_vocab
             
 #             raw_tgt = batch.dataset.examples[in_batch_index].tgt
             raw_tokens = self.build_target_tokens(src_vocab, tgt_vocab, batch.tgt.data[1:,i])
@@ -187,9 +188,10 @@ class Reward():
         return batch_scores, sample_scores, max_scores, sample_alignments        
                        
     
-    def get_batch_reward(self, batch, sample_indices, max_indices):
+    def get_batch_reward(self, batch, sample_indices, max_indices, copy=None):
         if self.reward == "rouge":
-            return self.get_rouge_reward(batch, sample_indices, max_indices)
+            assert copy is not None
+            return self.get_rouge_reward(batch, sample_indices, max_indices, copy)
         elif "entailment" in self.reward:
             return self.get_entailment_reward(batch, sample_indices, max_indices, self.reward)
         

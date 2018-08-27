@@ -29,15 +29,12 @@ class RLGeneratorCriterion(object):
 
         try:
         # Copy probability of tokens in source
-            out = scores.gather(1, align.view(-1, 1) + self.offset).view(-1)        
+            out = scores.gather(1, align.view(-1, 1) + self.offset).view(-1)
 #         out = scores.gather(1, align.view(-1, 1) + self.offset)
         except RuntimeError:
             print("RL line:34 socres size", scores.size())
             print("RL line:35 align size", align.size())
             sys.exit(1)
-        
-        
-
         
         # Set scores for unk to 0 and add eps
         out = out.mul(align_not_unk) + self.eps
@@ -77,8 +74,9 @@ class RLGeneratorLossCompute(onmt.Loss.LossComputeBase):
     Copy Generator Loss Computation.
     """
     def __init__(self, generator, tgt_vocab,
-                 force_copy, normalize_by_length,
-                 eps=1e-20):
+                 force_copy, normalize_by_length, use_copy,
+                 eps=1e-20, normalization="sents",
+                 label_smoothing=0.0, initial_weight=None):
         super(RLGeneratorLossCompute, self).__init__(
             generator, tgt_vocab)
 
@@ -87,11 +85,40 @@ class RLGeneratorLossCompute(onmt.Loss.LossComputeBase):
         self.cur_dataset = None
         self.force_copy = force_copy
         self.normalize_by_length = normalize_by_length
-        self.criterion = RLGeneratorCriterion(len(tgt_vocab), force_copy,
+        self.use_copy = use_copy 
+        if use_copy:
+            self.criterion = RLGeneratorCriterion(len(tgt_vocab), force_copy,
                                                 self.padding_idx)
-        self.validate_loss_compute = onmt.modules.CopyGeneratorLossCompute(generator, tgt_vocab,
+            self.validate_loss_compute = onmt.modules.CopyGeneratorLossCompute(generator, tgt_vocab,
                  force_copy, normalize_by_length,
-                 eps)
+                 eps)            
+        else:
+            assert (label_smoothing >= 0.0 and label_smoothing <= 1.0)
+            if label_smoothing > 0:
+                # When label smoothing is turned on,
+                # KL-divergence between q_{smoothed ground truth prob.}(w)
+                # and p_{prob. computed by model}(w) is minimized.
+                # If label smoothing value is set to zero, the loss
+                # is equivalent to NLLLoss or CrossEntropyLoss.
+                # All non-true labels are uniformly set to low-confidence.
+                self.criterion = nn.KLDivLoss(size_average=False)
+                one_hot = torch.randn(1, len(tgt_vocab))
+                one_hot.fill_(label_smoothing / (len(tgt_vocab) - 2))
+                one_hot[0][self.padding_idx] = 0
+                self.register_buffer('one_hot', one_hot)
+            else:
+                if initial_weight is not None:
+                    weight = torch.Tensor(initial_weight)
+                    print("Loss line:186 Initialize weights with parameter {}".format(weight.size()))
+                else:
+                    weight = torch.ones(len(tgt_vocab))
+                weight[self.padding_idx] = 0
+                self.criterion = nn.NLLLoss(weight, size_average=False)
+            self.confidence = 1.0 - label_smoothing
+            self.validate_loss_compute = onmt.Loss.NMTLossCompute(
+                generator, tgt_vocab,
+                label_smoothing=0.0, initial_weight=None)
+        
     
     def sharded_compute_loss(self, batch, output, attns,
                              cur_trunc, trunc_size, shard_size,
@@ -128,15 +155,26 @@ class RLGeneratorLossCompute(onmt.Loss.LossComputeBase):
         batch_stats = onmt.Statistics()
         range_ = (cur_trunc, cur_trunc + trunc_size)
         shard_state = self._make_shard_state(batch, output, range_, attns, rewards)
+        
+        
+        
 #         print("RL line:131 range", range_)
 
         for shard in onmt.Loss.shards(shard_state, shard_size):
 #             print("Loss, line:123", shard)
-            if 'rewards' not in shard:
-                print("rl line:121 validate")
-                loss, stats = self.validate_loss_compute(batch, **shard)        
+            if self.use_copy:
+                if 'rewards' not in shard:
+                    print("rl line:121 validate")
+                    loss, stats = self.validate_loss_compute(batch, **shard)        
+                else:
+                    loss, stats = self._compute_loss(batch, **shard)
             else:
-                loss, stats = self._compute_loss(batch, **shard)
+                if 'rewards' not in shard:
+                    print("rl line:121 validate")
+                    loss, stats = self.validate_loss_compute(batch, **shard)        
+                else:
+                    loss, stats = self._no_copy_compute_loss(batch, **shard)                
+                
             if backward:
                 loss.div(normalization).backward()
             batch_stats.update(stats)
@@ -145,9 +183,7 @@ class RLGeneratorLossCompute(onmt.Loss.LossComputeBase):
 
     def _make_shard_state(self, batch, output, range_, attns, rewards=None):
         """ See base class for args description. """
-        if getattr(batch, "alignment", None) is None:
-            raise AssertionError("using -copy_attn you need to pass in "
-                                 "-dynamic_dict during preprocess stage.")
+
 #         print("CopyGenerator line 163",batch.src)
 #         print("CopyGenerator line 164",batch.tgt[range_[0] + 1: range_[1]])
 #         print("CopyGenerator line 165",batch.alignment[range_[0] + 1: range_[1]])
@@ -157,6 +193,23 @@ class RLGeneratorLossCompute(onmt.Loss.LossComputeBase):
 #         print("RL line:141 tar size", batch.tgt)
 #         print("RL line:141 range", range_)
 #         print("RL line:159 output", output.size())
+        if not self.use_copy:
+            if rewards is None:
+                return {
+                    "output": output,
+                    "target": batch.tgt[range_[0] + 1: range_[1]],
+                }
+            else:
+                return {
+                    "output": output,
+                    "target": batch.tgt[range_[0] + 1: range_[1]],
+                    "rewards": rewards # for shards
+                }                
+                
+        if getattr(batch, "alignment", None) is None:
+            raise AssertionError("using -copy_attn you need to pass in "
+                                 "-dynamic_dict during preprocess stage.")                
+
         if rewards is None:
             return {
                 "output": output,
@@ -173,6 +226,48 @@ class RLGeneratorLossCompute(onmt.Loss.LossComputeBase):
             "rewards": rewards # for shards
 
         }
+    
+    def _no_copy_compute_loss(self, batch, output, target, rewards):
+        scores = self.generator(self._bottle(output))
+#         print("rl line:234 score size", scores.size()) # (target * batch )* vocablen
+#         print("rl line:234 rewards size", rewards.size()) # target * batch
+#         print("rl line:234 rewards size", target.size()) # target * batch
+        
+        
+        stat_reward = (rewards.sum()/rewards.size()[1]).data[0]
+        rewards = rewards.contiguous().view(-1)        
+#         rewards = rewards.unsqueeze(1).expand_as(scores)
+        
+#         print("rl line:234 rewards size", rewards.size()) # target * batch
+#         input("rl line:236")
+                
+
+        gtruth = target.view(-1)
+        if self.confidence < 1:
+            tdata = gtruth.data
+            mask = torch.nonzero(tdata.eq(self.padding_idx)).squeeze()
+            log_likelihood = torch.gather(scores.data, 1, tdata.unsqueeze(1))
+            tmp_ = self.one_hot.repeat(gtruth.size(0), 1)
+            tmp_.scatter_(1, tdata.unsqueeze(1), self.confidence)
+            if mask.dim() > 0:
+                log_likelihood.index_fill_(0, mask, 0)
+                tmp_.index_fill_(0, mask, 0)
+            gtruth = Variable(tmp_, requires_grad=False)
+        loss = self.criterion(scores * rewards.unsqueeze(1), gtruth)
+#         torch.pow(scores, rewards)
+#         print("rl line:253 loss", loss) # target * batch
+#         print("rl line:253 loss", loss) # target * batch
+#         input()
+        if self.confidence < 1:
+            # Default: report smoothed ppl.
+            # loss_data = -log_likelihood.sum(0)
+            loss_data = loss.data.clone()
+        else:
+            loss_data = loss.data.clone()
+
+        stats = self._stats(loss_data, scores.data, target.view(-1).data)
+
+        return loss, stats    
 
     def _compute_loss(self, batch, output, target, copy_attn, align, rewards):
         """

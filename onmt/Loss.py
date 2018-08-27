@@ -124,6 +124,10 @@ class LossComputeBase(nn.Module):
         batch_stats = onmt.Statistics()
         range_ = (cur_trunc, cur_trunc + trunc_size)
         shard_state = self._make_shard_state(batch, output, range_, attns)
+        
+        if normalization <= 0:
+            print("Loss line:129 normalization below 0")
+            normalization = 1
 
         for shard in shards(shard_state, shard_size):
 #             print("Loss, line:123", shard)
@@ -131,6 +135,7 @@ class LossComputeBase(nn.Module):
             loss, stats = self._compute_loss(batch, **shard)
             if backward:
                 loss.div(normalization).backward()
+                
             batch_stats.update(stats)
 
 #         input()            

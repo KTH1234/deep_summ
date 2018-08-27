@@ -218,8 +218,9 @@ def make_loss_compute(model, tgt_vocab, opt, train=True, fields=None):
         if opt.obj_f == "rl" and train:
             compute = onmt.modules.RLGeneratorLossCompute(
                 model.generator, tgt_vocab, opt.copy_attn_force,
-                opt.copy_loss_by_seqlength)
+                opt.copy_loss_by_seqlength, opt.copy_attn)
         elif opt.obj_f =="hybrid" and train:
+            # need to add copy info
             compute = onmt.modules.HybridLossCompute(
                 model.generator, tgt_vocab, opt.copy_attn_force,
                 opt.copy_loss_by_seqlength, opt.apply_factor)
@@ -234,6 +235,15 @@ def make_loss_compute(model, tgt_vocab, opt, train=True, fields=None):
             idf = onmt.modules.Idf(revision_num = opt.idf_revision_num)
             words = [ fields["tgt"].vocab.itos[i] for i in range(len(fields["tgt"].vocab)) ]            
             words_df_weights = idf.get_idf_weights(None, words, revision=False if opt.idf_revision_num == 0 else True)
+        elif opt.obj_f == "rl" and train:
+            compute = onmt.modules.RLGeneratorLossCompute(
+                model.generator, tgt_vocab, opt.copy_attn_force,
+                opt.copy_loss_by_seqlength, opt.copy_attn)
+            if use_gpu(opt):
+                    compute.cuda()
+
+            return compute
+            
         else:
             words_df_weights = None
         

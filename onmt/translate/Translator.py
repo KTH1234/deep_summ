@@ -200,10 +200,13 @@ class Translator(object):
         all_scores = []
         # for demo page
         attns_info = []
+        context_attns_info = []
         oov_info = []
         copy_info = []
 
         for batch in data_iter:
+#             print("Translator line:163  batch", batch)
+#             print("Translator line:163  batch", batch.context_lengthes)
             def check_oov(batch, vocab):
 #                 print("Translator line:163 len batch", len(batch))
 #                 print("Translator line:163 unk index", vocab.stoi["<unk>"]) # 0
@@ -228,8 +231,11 @@ class Translator(object):
 
 #             print("Translator line:219 model_type", self.model.model_type)
             batch_data = self.translate_batch(batch, data, self.model.model_type)
+#             print("Translator line:232 batch_data[\"context_attention\"]", batch_data["context_attention"])
             translations = builder.from_batch(batch_data)
-
+            
+#             print("Translator line:235 len(translations)", len(translations))
+            
             for trans in translations:
                 all_scores += [trans.pred_scores[0]]
                 pred_score_total += trans.pred_scores[0]
@@ -256,9 +262,18 @@ class Translator(object):
 
                 # for demo page
                 attns_info.append( torch.sum(trans.attns[0],0).tolist())
+#                     print("Translator line:365 trans.context_attns", trans.context_attns)           
                 if trans.copys is not None:                    
                     copy_info.append(trans.copys[0][0].squeeze(1).tolist())
+#                 print("Translator line:365 trans.context_attns", trans.context_attns)               
+#                 print("Translator line:365 trans.context_attns", type(trans.context_attns)               )
+                if not isinstance(trans.context_attns[0][0], list):
+#                     print("Translator line:365 trans.context_attns", trans.context_attns)   
+                    context_attns_info.append(torch.sum(trans.context_attns[0][0],0).tolist())
+#                     context_attns_info.append(trans.context_attns[0][0].squeeze(1).tolist())
+                    
 #                 print(copy_info)
+#                 print("Translator line:365 trans.context_attns", trans.context_attns)  
 #                 print("Translator line:183 pred_sents[0]", trans.pred_sents[0])  
 #                 print("Translator line:183 pred_sents[0] len", len(trans.pred_sents[0]))                    
                 
@@ -296,7 +311,7 @@ class Translator(object):
             import json
             json.dump(self.translator.beam_accum,
                       codecs.open(self.dump_beam, 'w', 'utf-8'))
-        return all_scores, attns_info, oov_info, copy_info
+        return all_scores, attns_info, oov_info, copy_info, context_attns_info
 
     def translate_batch(self, batch, data, model_type):
         """
@@ -468,6 +483,8 @@ class Translator(object):
 #                 print("translator line:456 attn", attn["std"].size()) 
 #                 print("translator line:456 unbottle(attn)", unbottle(attn["std"]).size()) 
                 dec_out = dec_out.squeeze(0)
+                
+#                 print("translator line:456 context_attns", torch.exp(context_attns['std']))
 
             # to do handle context_attn information
 #                 self.model.context_attns = context_attns                
@@ -476,11 +493,14 @@ class Translator(object):
             
 
             # (b) Compute a vector of batch x beam word scores.
+            beam_copy_attn = None
             if not self.copy_attn:
                 out = self.model.generator.forward(dec_out).data
                 out = unbottle(out)
                 # beam x tgt_vocab
                 beam_attn = unbottle(attn["std"])
+                if model_type == "hierarchical_text":
+                    beam_copy_attn = unbottle(context_attns["std"])
             else:
                 # assume demo page
                 out, p_copy = self.model.generator.forward(dec_out,
@@ -494,8 +514,13 @@ class Translator(object):
                 out = out.log()
                 beam_attn = unbottle(attn["copy"])
                 beam_copy = unbottle(p_copy)
+                if model_type == "hierarchical_text":
+                    beam_copy_attn = unbottle(context_attns["copy"])
             # (c) Advance each beam.
-#             print("Translator line:353 attn", beam_attn) # 
+#             print("Translator line:353 attn", beam_attn) # beam * batch * len
+#             print("Translator line:353 beam_copy_attn", beam_copy_attn) # 
+#             print("Translator line:353 beam_copy_attn.data[:,j,:]", beam_copy_attn.data[:,0,:]) # 
+     
 #             print("Translator line:353 attn copy", attn["copy"])
 #             print("Translator line:353 p_copy", p_copy) # baem*batch
 #             print("Translator line:353 unbottle p_copy", unbottle(p_copy)) # beam, batch, 1
@@ -508,12 +533,16 @@ class Translator(object):
             for j, b in enumerate(beam):
                 if not self.copy_attn:
                         b.advance(out[:, j],
-                                  beam_attn.data[:, j, :memory_lengths[j]])
-                        dec_states.beam_update(j, b.get_current_origin(), beam_size)
+                                  beam_attn.data[:, j, :memory_lengths[j]],
+                                  context_attn_out = beam_copy_attn.data[:,j,:]
+                                 
+                                 )
+                        dec_states.beam_update(j, b.get_current_origin(), beam_size,)
                 else:
                         b.advance(out[:, j],
-                                  beam_attn.data[:, j, :memory_lengths[j]], copy_out=beam_copy.data[:,j,:])
-                        dec_states.beam_update(j, b.get_current_origin(), beam_size)                    
+                                  beam_attn.data[:, j, :memory_lengths[j]], copy_out=beam_copy.data[:,j,:], 
+                                  context_attn_out = beam_copy_attn.data[:,j,:] if beam_copy_attn is not None else None)
+                        dec_states.beam_update(j, b.get_current_origin(), beam_size,)                    
 
 
         # (4) Extract sentences from beam.
@@ -528,26 +557,36 @@ class Translator(object):
         ret = {"predictions": [],
                "scores": [],
                "attention": [],
-              "copy":[]}
+              "copy":[],
+              "context_attention":[]}
         for b in beam:
             n_best = self.n_best
             scores, ks = b.sort_finished(minimum=n_best)
-            hyps, attn, copy = [], [], []
+            hyps, attn, copy, context_attn = [], [], [], []
             for i, (times, k) in enumerate(ks[:n_best]):
                 if len(b.copy_p) != 0:
-                    hyp, att, copy_p = b.get_hyp(times, k)
+                    hyp, att, copy_p, context_attn_p = b.get_hyp(times, k)
                     copy.append(copy_p)
                 else:
-                    hyp, att = b.get_hyp(times, k)
+                    hyp, att, context_attn_p = b.get_hyp(times, k)
+                    
                 hyps.append(hyp)
                 attn.append(att)
+                context_attn.append(context_attn_p)
+#                 print("Translator line:568 context_attn_p", context_attn_p) # 
             ret["predictions"].append(hyps)
             ret["scores"].append(scores)
             ret["attention"].append(attn)
+            ret["context_attention"].append(context_attn)  
+#             print("Translator line:571 context_attn", context_attn) # 
+            
             if len(copy) != 0:
                 ret["copy"].append(copy)  
+            
         if len(copy) == 0:
             ret.pop("copy")
+#         if len(context_attention) == 0:
+#             ret.pop("context_attention")
         return ret
 
     def _run_target(self, batch, data):
