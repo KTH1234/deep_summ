@@ -266,11 +266,17 @@ class Trainer(object):
             tgt = onmt.io.make_features(batch, 'tgt')
 
             # F-prop through the model.
-            outputs, attns, _ = self.model(src, tgt, src_lengths, batch=batch)
+            if self.model.model_type == "hierarchical_text":
+                outputs, sent_attns, context_attns, dec_state = self.model(src, tgt, src_lengths, batch=batch)
+                # Compute loss.
+                batch_stats = self.valid_loss.monolithic_compute_loss(
+                        batch, outputs, context_attns)                
+            else:
+                outputs, attns, _ = self.model(src, tgt, src_lengths, batch=batch)
 
-            # Compute loss.
-            batch_stats = self.valid_loss.monolithic_compute_loss(
-                    batch, outputs, attns)
+                # Compute loss.
+                batch_stats = self.valid_loss.monolithic_compute_loss(
+                        batch, outputs, attns)
 
             # Update statistics.
             stats.update(batch_stats)
@@ -367,13 +373,13 @@ class Trainer(object):
                     # 2. F-prop all but generator.
                     if self.grad_accum_count == 1:
                         self.model.zero_grad()
-                    outputs, attns, dec_state = \
+                    outputs, sent_attns, context_attns, dec_state = \
                         self.model(src, tgt, src_lengths, dec_state, batch)
 #                     print("Trainer line:346 outputs", outputs.size())                        
 #                     print("Trainer line:347 tgt", tgt.size())   
                     # 3. Compute loss in shards for memory efficiency.
                     batch_stats = self.train_loss.sharded_compute_loss(
-                            batch, outputs, attns, j,
+                            batch, outputs, context_attns, j,
                             trunc_size, self.shard_size, normalization)
 #                     input("trainer line:377")
                     # 4. Update the parameters and statistics.

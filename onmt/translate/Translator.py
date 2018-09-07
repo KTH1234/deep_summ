@@ -381,13 +381,36 @@ class Translator(object):
             memory_bank = rvar(memory_bank.data)
             memory_lengths = src_lengths.repeat(beam_size)
         elif model_type == "hierarchical_text":
-            sentence_memory_bank, sent_memory_length_history, context_memory_bank, context_enc_final = self.model.hierarchical_encode(src, src_lengths, batch)
+            
+            # prev 18.09.07
+#             sentence_memory_bank, sent_memory_length_history, context_memory_bank, context_enc_final = self.model.hierarchical_encode(src, src_lengths, batch)
 
-            dec_states = \
-                self.model.decoder.init_decoder_state(src, context_memory_bank, context_enc_final)
+#             dec_states = \
+#                 self.model.decoder.init_decoder_state(src, context_memory_bank, context_enc_final)
 
+#             sentence_memory_length = sent_memory_length_history
+#             context_memory_length = batch.context_lengthes
+            
+#             sentence_memory_bank = rvar(sentence_memory_bank.data)
+#             context_memory_bank = rvar(context_memory_bank.data)
+#             sentence_memory_length = sentence_memory_length.repeat(beam_size) # variable
+#             context_memory_length = context_memory_length.repeat(beam_size)
+#             context_mask = batch.context_mask.repeat(1, beam_size)
+#             global_sentence_memory_length = torch.sum((batch.context_mask >= 0).long(), 0)
+#             global_sentence_memory_length = global_sentence_memory_length.repeat(beam_size)
+###########################
+            
+            
+            sentence_memory_bank, sent_memory_length_history, context_memory_bank, context_enc_final, sent_attns = self.model.hierarchical_encode(src, src_lengths, batch)            
+            dec_states = self.model.decoder.init_decoder_state(src, context_memory_bank, context_enc_final)
+            
             sentence_memory_length = sent_memory_length_history
             context_memory_length = batch.context_lengthes
+            
+            
+            arranged_sent_attns = self.model.rearrange_sent_attn(sent_attns.transpose(0,1), sent_memory_length_history, batch.context_mask)
+#             print("Translator line:411 arranged_sent_attns", arranged_sent_attns) # 1 * sent max len
+#             input("translator line:412")
             
             sentence_memory_bank = rvar(sentence_memory_bank.data)
             context_memory_bank = rvar(context_memory_bank.data)
@@ -395,7 +418,8 @@ class Translator(object):
             context_memory_length = context_memory_length.repeat(beam_size)
             context_mask = batch.context_mask.repeat(1, beam_size)
             global_sentence_memory_length = torch.sum((batch.context_mask >= 0).long(), 0)
-            global_sentence_memory_length = global_sentence_memory_length.repeat(beam_size)
+            global_sentence_memory_length = global_sentence_memory_length.repeat(beam_size)            
+            
             
 #             print("Translator line:377 batch.context_mask", batch.context_mask)
 #             print("Translator line:377 sentence_momory_length", sentence_memory_length)
@@ -431,6 +455,8 @@ class Translator(object):
         src_map = rvar(batch.src_map.data) \
             if (data_type == 'text' or data_type == 'hierarchical_text') and self.copy_attn else None
 
+        if model_type != "hierarchical_text":
+            self.model.decoder.init_attn_history() # init attn history in decoder for new attention
         dec_states.repeat_beam_size_times(beam_size)        
         
 #         print("Translator line:338 src", src)
@@ -439,7 +465,7 @@ class Translator(object):
 #         print("Translator line:355 memory_bank", memory_bank)
 #         input()        
         
-        self.model.decoder.init_attn_history() # init attn history in decoder for new attention
+
 
         # (3) run the decoder to generate sentences, using beam search.
         for i in range(self.max_length):
@@ -473,15 +499,25 @@ class Translator(object):
 #                 print("translator line:456 attn", attn["std"].size()) 
 #                 print("translator line:456 unbottle(attn)", unbottle(attn["std"]).size())                 
             elif model_type == "hierarchical_text":
-                dec_out, dec_states, attn, context_attns = \
-                    self.model.decoder(inp, sentence_memory_bank, context_memory_bank, 
-                                 dec_states,
-                                 sentence_memory_length,
-                                 context_memory_length,
-                                 context_mask)
+                # prev18.09.07
+#                 dec_out, dec_states, attn, context_attns = \
+#                     self.model.decoder(inp, sentence_memory_bank, context_memory_bank, 
+#                                  dec_states,
+#                                  sentence_memory_length,
+#                                  context_memory_length,
+#                                  context_mask)
+#################
 #                 print("translator line:456 dec_out", dec_out.size()) 1 * (batch*beam) * hidden
 #                 print("translator line:456 attn", attn["std"].size()) 
 #                 print("translator line:456 unbottle(attn)", unbottle(attn["std"]).size()) 
+
+                dec_out, dec_states, context_attns = \
+                    self.model.decoder(inp, context_memory_bank, 
+                         dec_states,
+                         context_memory_length,
+                         context_mask)
+                attn = context_attns
+
                 dec_out = dec_out.squeeze(0)
                 
 #                 print("translator line:456 context_attns", torch.exp(context_attns['std']))
@@ -550,7 +586,16 @@ class Translator(object):
         ret["gold_score"] = [0] * batch_size
 #         if "tgt" in batch.__dict__:
 #             ret["gold_score"] = self._run_target(batch, data)
+#         print("translator line:584 ret[attention]", ret["attention"]) # list [batch * [attn (batch * src len)]] 
+#         print("translator line:584 ret[attention]", type(ret)) # list [[attn (batch * src len)]]
+#         print("translator line:584 len(ret[attention])", len(ret["attention"])) # 1
+#         print("translator line:584 len(ret[attention][0])", len(ret["attention"][0])) #1
+#         input("translator line:585")
         ret["batch"] = batch
+        if  model_type == "hierarchical_text":
+            ret["attention"] = [[arranged_sent_attns[idx:idx+1,:].data] for idx in range(arranged_sent_attns.size(0))]
+#             print("translator line:584 ret[attention]", ret["attention"]) # list [[attn (batch * src len)]]
+            
         return ret
 
     def _from_beam(self, beam):
