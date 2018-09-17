@@ -339,7 +339,8 @@ class RNNDecoderBase(nn.Module):
                  coverage_attn=False, context_gate=None,
                  copy_attn=False, dropout=0.0, embeddings=None,
                  reuse_copy_attn=False,
-                 model_type=None ):
+                 model_type=None,
+                 hier_add_word_enc_input=None):
         super(RNNDecoderBase, self).__init__()
 
         # Basic attributes.
@@ -371,7 +372,12 @@ class RNNDecoderBase(nn.Module):
         if model_type == "hierarchical_text":
             self.attn = onmt.modules.HierarchicalAttention(
                 hidden_size, coverage=coverage_attn,
-                attn_type=attn_type
+                attn_type=attn_type,
+                hier_add_word_enc_input = hier_add_word_enc_input
+            )
+            self.word_attn = onmt.modules.HierarchicalAttention(
+                hidden_size, coverage=coverage_attn,
+                attn_type=attn_type,
             )            
             print("model line:373 hierarchical attn")
         else:
@@ -709,7 +715,7 @@ class HierarchicalInputFeedRNNDecoder(RNNDecoderBase):
           E --> H
           G --> H
     """
-    def forward(self, tgt, context_memory_bank, state, context_memory_lengths, context_mask, idf_weights=None):
+    def forward(self, tgt, context_memory_bank, state, context_memory_lengths, context_mask, idf_weights=None, normal_word_enc_mb=None, normal_word_enc_mb_len=None):
         """
         Args:
             # 18.07.24 thkim
@@ -742,8 +748,9 @@ class HierarchicalInputFeedRNNDecoder(RNNDecoderBase):
         # END
         
         # Run the forward pass of the RNN.
+        
         decoder_final, decoder_outputs, context_attns = self._run_forward_pass(
-            tgt, context_memory_bank, state, context_memory_lengths, context_mask, idf_weights=idf_weights)
+            tgt, context_memory_bank, state, context_memory_lengths, context_mask, idf_weights=idf_weights, normal_word_enc_mb=normal_word_enc_mb, normal_word_enc_mb_len = normal_word_enc_mb_len)
 
         # Update the state with the result.
         final_output = decoder_outputs[-1]
@@ -762,7 +769,7 @@ class HierarchicalInputFeedRNNDecoder(RNNDecoderBase):
         return decoder_outputs, state, context_attns    
     
 
-    def _run_forward_pass(self, tgt, context_memory_bank, state, context_memory_lengths, context_mask, idf_weights=None):
+    def _run_forward_pass(self, tgt, context_memory_bank, state, context_memory_lengths, context_mask, idf_weights=None, normal_word_enc_mb=None, normal_word_enc_mb_len=None):
         """
         See StdRNNDecoder._run_forward_pass() for description
         of arguments and return values.
@@ -777,7 +784,7 @@ class HierarchicalInputFeedRNNDecoder(RNNDecoderBase):
         # Initialize local and return variables.
         decoder_outputs = []
         attns = {"std": []}
-        context_attns = {"std": []}
+        context_attns = {"std": [], "context": []}
         if self._copy:
             attns["copy"] = []
             context_attns["copy"]  = []
@@ -789,6 +796,8 @@ class HierarchicalInputFeedRNNDecoder(RNNDecoderBase):
 #         print("model line 785 context m bank", context_memory_bank)
 #         print("model line 785 sentence_memory_lengths", sentence_memory_lengths)
 #         print("model line 785 context_memory_lengths", context_memory_lengths)
+        #print("model line:794 normal_word_enc_input", normal_word_enc_input) # 1 * batch * hidden
+        #input("model line:795")
             
         # for intra-temporal attention, init attn history per every batches
 #         self.attn.init_attn_outputs()
@@ -820,13 +829,19 @@ class HierarchicalInputFeedRNNDecoder(RNNDecoderBase):
 #             print("model line 508 before attn")
 #             print("model line:815 decoder rnn output", rnn_output) # batch * hidden
 
-
-
+            #print("model line:832 decoder rnn output", rnn_output) # batch * hidden
+            word_attn_output, word_attn = self.word_attn(
+                rnn_output,
+                normal_word_enc_mb.transpose(0, 1),
+                normal_word_enc_mb_len,
+            )
+            #print("model line:838 decoder rnn word_attn_output", word_attn_output) # batch * hidden
 
             decoder_output, context_attn = self.attn(
                 rnn_output,
                 context_memory_bank.transpose(0, 1),
                 context_memory_lengths.data,
+                normal_word_enc_input = word_attn_output.unsqueeze(1)
             ) # for sharing decoder weight
 #             print("model line 513 after attn")
 
@@ -851,7 +866,8 @@ class HierarchicalInputFeedRNNDecoder(RNNDecoderBase):
             decoder_outputs += [decoder_output]
 #             print("model line:529 dec out", decoder_output.size())
             #attns["std"] += [p_attn]
-            context_attns["std"] += [context_attn]
+            context_attns["std"] += [word_attn]
+            context_attns["context"] += [context_attn]
 #             print("model line:530 p_attn", p_attn)
 
             # Update the coverage attention.
@@ -1174,18 +1190,19 @@ class HierarchicalModel(nn.Module):
       decoder (:obj:`RNNDecoderBase`): a decoder object
       multi<gpu (bool): setup for multigpu support
     """
-    def __init__(self, context_encoder, sent_encoder, decoder, multigpu=False):
+    def __init__(self, context_encoder, sent_encoder, decoder, multigpu=False, normal_encoder=None):
         self.multigpu = multigpu
         super(HierarchicalModel, self).__init__()
         self.context_encoder = context_encoder
         self.sent_encoder = sent_encoder
+        self.normal_encoder =  normal_encoder
+
+       
         self.decoder = decoder
-        
-        # sentence attention
         self.attn = onmt.modules.HierarchicalAttention(
-            decoder.hidden_size, coverage=None,
-            attn_type="general"
-        )
+            self.decoder.hidden_size, coverage=None,
+            attn_type="general")
+        
         
     def rearrange_sent_attn(self, sent_align_vectors, sentence_memory_lengths, context_mask):
         #print("model line:1191 sent_align_vectors", sent_align_vectors.size()) # sent_num * 1 * max len
@@ -1306,6 +1323,7 @@ class HierarchicalModel(nn.Module):
                 
         sent_final, sent_memory_bank = self.sent_encoder(sorted_all_sents, sorted_all_sents_lengths.data)
         
+        
         # LSTM
         if isinstance(sent_final, tuple):
             sent_final = sent_final[0]            
@@ -1320,8 +1338,8 @@ class HierarchicalModel(nn.Module):
         sent_final = torch.index_select(sent_final, 1, reversed_indices)    
         
         
-#         print("Model line:1274 sent_final", sent_final.size()) 
-#         print("Model line:1275 sent_memory_bank", sent_memory_bank.size()) 
+        #print("Model line:1274 sent_final", sent_final.size()) 
+        #print("Model line:1275 sent_memory_bank", sent_memory_bank.size()) 
         
         sent_final, p_attn = self.attn(
                 sent_final.transpose(0,1),
@@ -1394,6 +1412,33 @@ class HierarchicalModel(nn.Module):
         """
 #         print("model line:602", self.obj_f)
         assert batch is not None
+    
+        enc_final = None
+        if self.normal_encoder is not None:
+            #print("model line:1408 lengths", lengths) # cudaLongTensor, batch
+            sorted_lengths, sorted_indices = torch.sort(lengths, descending=True)
+    #         sorted_all_sents_lengths, b = torch.sort(all_sents_lengths, descending=True)
+            sorted_indices = torch.autograd.Variable(sorted_indices)
+            sorted_sents = torch.index_select(src, 1, sorted_indices)
+
+            _, reversed_indices = torch.sort(sorted_indices)
+
+            enc_final, memory_bank = self.normal_encoder(sorted_sents, sorted_lengths)
+
+            # LSTM
+            if isinstance(enc_final, tuple):
+                enc_final = enc_final[0]            
+
+            if self.sent_encoder.rnn.bidirectional:
+                compression = lambda h:torch.cat([h[0:h.size(0):2], h[1:h.size(0):2]], 2)
+                enc_final = compression(enc_final)                        
+
+            # sent_final : 1 * sum(context_len) * hidden
+            # sent_memory_bank : max_sent_len * sum(context_len) * hidden        
+            memory_bank = torch.index_select(memory_bank, 1, reversed_indices) 
+            enc_final = torch.index_select(enc_final, 1, reversed_indices)                
+            
+            # normal_word_enc_input
 
         sent_memory_history, sent_memory_length_history, context_memory_bank, context_enc_final, sent_attns = self.hierarchical_encode(src, lengths, batch)
 #         print("model line:1344 c m bank", context_memory_bank)
@@ -1424,7 +1469,10 @@ class HierarchicalModel(nn.Module):
                          enc_state if dec_state is None
                          else dec_state,
                          context_memory_length,
-                         batch.context_mask)
+                         batch.context_mask,
+                         normal_word_enc_mb=memory_bank, 
+                         normal_word_enc_mb_len=lengths
+                        )
         if self.multigpu:
             # Not yet supported on multi-gpu
             dec_state = None

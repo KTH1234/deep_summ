@@ -60,6 +60,10 @@ def model_opts(parser):
                        help="""Type of decoder layer to use. Non-RNN layers
                        are experimental. Options are
                        [rnn|transformer|cnn].""")
+    
+    ## for hierarchical model
+    group.add_argument('-hier_add_word_enc_input', type=int, default=1,
+                      help='Number of layers in the encoder')
 
     group.add_argument('-layers', type=int, default=-1,
                        help='Number of layers in enc/dec.')
@@ -411,6 +415,9 @@ def translate_opts(parser):
     group = parser.add_argument_group('Model')
     group.add_argument('-idf_attn_weight', action="store_true",
                        help='multiply idf value to attn weight')    
+    
+    group.add_argument('-normal_word_attn', action="store_true",
+                       help='print normal word attn info not hier attn info')     
     
     group.add_argument('-model', required=True,
                        help='Path to model .pt file')

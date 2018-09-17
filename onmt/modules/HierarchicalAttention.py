@@ -47,15 +47,17 @@ class HierarchicalAttention(nn.Module):
        coverage (bool): use coverage term
        attn_type (str): type of attention to use, options [dot,general,mlp]
     """
-    def __init__(self, dim, coverage=False, attn_type="dot"):
+    def __init__(self, dim, coverage=False, attn_type="dot", hier_add_word_enc_input=None):
         super(HierarchicalAttention, self).__init__()
 
         self.dim = dim
         self.attn_type = attn_type
+        self.hier_add_word_enc_input = hier_add_word_enc_input
         assert (self.attn_type in ["dot", "general", "mlp"]), (
                 "Please select a valid attention type.")
 
         if self.attn_type == "general":
+            print("@@")
             self.linear_in = nn.Linear(dim, dim, bias=False)
         elif self.attn_type == "mlp":
             self.linear_context = nn.Linear(dim, dim, bias=False)
@@ -63,7 +65,10 @@ class HierarchicalAttention(nn.Module):
             self.v = nn.Linear(dim, 1, bias=False)
         # mlp wants it with bias
         out_bias = self.attn_type == "mlp"
-        self.linear_out = nn.Linear(dim*2, dim, bias=out_bias)
+        if hier_add_word_enc_input is not None:
+            self.linear_out = nn.Linear(dim*3, dim, bias=out_bias)
+        else:
+            self.linear_out = nn.Linear(dim*2, dim, bias=out_bias)
 
         self.sm = nn.Softmax(dim=-1)
         self.tanh = nn.Tanh()
@@ -112,7 +117,7 @@ class HierarchicalAttention(nn.Module):
 
             return self.v(wquh.view(-1, dim)).view(tgt_batch, tgt_len, src_len)
 
-    def forward(self, input, memory_bank, memory_lengths=None, coverage=None):
+    def forward(self, input, memory_bank, memory_lengths=None, coverage=None, normal_word_enc_input=None):
         """
         Args:
           input (`FloatTensor`): query vectors `[batch x tgt_len x dim]`
@@ -135,6 +140,11 @@ class HierarchicalAttention(nn.Module):
 
         batch, sourceL, dim = memory_bank.size()
         batch_, targetL, dim_ = input.size()
+        if normal_word_enc_input is not None:
+            batch_n, targetL_n, dim_n = input.size()
+            aeq(batch, batch_n)
+            aeq(dim, dim_n)
+        
         aeq(batch, batch_)
         aeq(dim, dim_)
         aeq(self.dim, dim)
@@ -165,7 +175,16 @@ class HierarchicalAttention(nn.Module):
         c = torch.bmm(align_vectors, memory_bank)
 
         # concatenate
-        concat_c = torch.cat([c, input], 2).view(batch*targetL, dim*2)
+        if self.hier_add_word_enc_input is not None:
+            assert normal_word_enc_input is not None
+            #print("hier attn line:174 c", c) # batch * 1 * hidden
+            #print("hier attn line:175 input", input) # batch * 1 * hidden
+            #print("hier attn line:176 normal_word_enc_input", normal_word_enc_input) # batch * 1 * hidden
+            
+            concat_c = torch.cat([c, input, normal_word_enc_input], 2).view(batch*targetL, dim*3)
+            #input("hier attn line:179")
+        else:
+            concat_c = torch.cat([c, input], 2).view(batch*targetL, dim*2)
         attn_h = self.linear_out(concat_c).view(batch, targetL, dim)
         if self.attn_type in ["general", "dot"]:
             attn_h = self.tanh(attn_h)

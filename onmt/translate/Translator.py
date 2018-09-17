@@ -41,9 +41,13 @@ def make_translator(opt, report_score=True, out_file=None):
     if "idf_attn_weight" in opt:
         kwargs["idf_attn_weight"] = getattr(opt, "idf_attn_weight")
     if "remove_delimiter" in opt:
-        kwargs["remove_delimiter"] = getattr(opt, "remove_delimiter")        
+        kwargs["remove_delimiter"] = getattr(opt, "remove_delimiter")
     if "context_delimiter_char" in opt:
-        kwargs["context_delimiter_char"] = getattr(opt, "context_delimiter_char")                
+        kwargs["context_delimiter_char"] = getattr(opt, "context_delimiter_char")
+    if "normal_word_attn" in opt:
+        kwargs["normal_word_attn"] = getattr(opt, "normal_word_attn")
+        
+        
     
 
     translator = Translator(model, fields, global_scorer=scorer,
@@ -100,7 +104,7 @@ class Translator(object):
                  idf_attn_weight=False,
                  context_delimiter_char=None,
                  remove_delimiter=False,
-                 
+                 normal_word_attn=False,
                 ):
         self.gpu = gpu
         self.cuda = gpu > -1
@@ -132,6 +136,7 @@ class Translator(object):
         self.idf_attn_weight = idf_attn_weight
         self.context_delimiter_char = context_delimiter_char
         self.remove_delimiter = remove_delimiter
+        self.normal_word_attn = normal_word_attn
         
         # hardcoded to load idf value
         if self.idf_attn_weight:
@@ -418,7 +423,35 @@ class Translator(object):
             context_memory_length = context_memory_length.repeat(beam_size)
             context_mask = batch.context_mask.repeat(1, beam_size)
             global_sentence_memory_length = torch.sum((batch.context_mask >= 0).long(), 0)
-            global_sentence_memory_length = global_sentence_memory_length.repeat(beam_size)            
+            global_sentence_memory_length = global_sentence_memory_length.repeat(beam_size)  
+            
+            enc_final = None
+            if hasattr(self.model, "normal_encoder") and self.model.normal_encoder is not None:
+                #print("model line:1408 lengths", lengths) # cudaLongTensor, batch
+                sorted_lengths, sorted_indices = torch.sort(src_lengths, descending=True)
+        #         sorted_all_sents_lengths, b = torch.sort(all_sents_lengths, descending=True)
+                sorted_indices = torch.autograd.Variable(sorted_indices)
+                sorted_sents = torch.index_select(src, 1, sorted_indices)
+
+                _, reversed_indices = torch.sort(sorted_indices)
+
+                enc_final, memory_bank = self.model.normal_encoder(sorted_sents, sorted_lengths)
+
+                # LSTM
+                if isinstance(enc_final, tuple):
+                    enc_final = enc_final[0]            
+
+                if self.model.sent_encoder.rnn.bidirectional:
+                    compression = lambda h:torch.cat([h[0:h.size(0):2], h[1:h.size(0):2]], 2)
+                    enc_final = compression(enc_final)                        
+
+                # sent_final : 1 * sum(context_len) * hidden
+                # sent_memory_bank : max_sent_len * sum(context_len) * hidden        
+                memory_bank = torch.index_select(memory_bank, 1, reversed_indices) 
+                memory_bank = rvar(memory_bank.data) 
+                enc_final = torch.index_select(enc_final, 1, reversed_indices)   
+                enc_final = rvar(enc_final.data)
+                src_lengths = src_lengths.repeat(beam_size)
             
             
 #             print("Translator line:377 batch.context_mask", batch.context_mask)
@@ -510,13 +543,22 @@ class Translator(object):
 #                 print("translator line:456 dec_out", dec_out.size()) 1 * (batch*beam) * hidden
 #                 print("translator line:456 attn", attn["std"].size()) 
 #                 print("translator line:456 unbottle(attn)", unbottle(attn["std"]).size()) 
-
-                dec_out, dec_states, context_attns = \
-                    self.model.decoder(inp, context_memory_bank, 
-                         dec_states,
-                         context_memory_length,
-                         context_mask)
-                attn = context_attns
+                if hasattr(self.model, "normal_encoder"):
+                    dec_out, dec_states, context_attns = \
+                        self.model.decoder(inp, context_memory_bank, 
+                             dec_states,
+                             context_memory_length,
+                             context_mask,                         
+                             normal_word_enc_mb=memory_bank, 
+                             normal_word_enc_mb_len=src_lengths)
+                    attn = context_attns        
+                else:
+                    dec_out, dec_states, context_attns = \
+                        self.model.decoder(inp, context_memory_bank, 
+                             dec_states,
+                             context_memory_length,
+                             context_mask)
+                    attn = context_attns
 
                 dec_out = dec_out.squeeze(0)
                 
@@ -536,7 +578,7 @@ class Translator(object):
                 # beam x tgt_vocab
                 beam_attn = unbottle(attn["std"])
                 if model_type == "hierarchical_text":
-                    beam_copy_attn = unbottle(context_attns["std"])
+                    beam_copy_attn = unbottle(context_attns["context"])
             else:
                 # assume demo page
                 out, p_copy = self.model.generator.forward(dec_out,
@@ -593,7 +635,8 @@ class Translator(object):
 #         input("translator line:585")
         ret["batch"] = batch
         if  model_type == "hierarchical_text":
-            ret["attention"] = [[arranged_sent_attns[idx:idx+1,:].data] for idx in range(arranged_sent_attns.size(0))]
+            if not self.normal_word_attn:
+                ret["attention"] = [[arranged_sent_attns[idx:idx+1,:].data] for idx in range(arranged_sent_attns.size(0))]
 #             print("translator line:584 ret[attention]", ret["attention"]) # list [[attn (batch * src len)]]
             
         return ret

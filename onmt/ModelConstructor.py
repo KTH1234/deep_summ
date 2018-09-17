@@ -103,7 +103,8 @@ def make_decoder(opt, embeddings):
                                    opt.dropout,
                                    embeddings,
                                    opt.reuse_copy_attn,
-                                   opt.model_type )
+                                   opt.model_type,
+                                   opt.hier_add_word_enc_input )
     elif opt.input_feed:
         return InputFeedRNNDecoder(opt.rnn_type, opt.brnn,
                                    opt.dec_layers, opt.rnn_size,
@@ -172,7 +173,11 @@ def make_base_model(model_opt, fields, gpu, checkpoint=None):
         feature_dicts = onmt.io.collect_feature_vocabs(fields, 'src')
         src_embeddings = make_embeddings(model_opt, src_dict,
                                          feature_dicts)
-        sent_encoder = make_encoder(model_opt, src_embeddings)        
+        sent_encoder = make_encoder(model_opt, src_embeddings)  
+        if model_opt.hier_add_word_enc_input:
+            encoder = make_encoder(model_opt, src_embeddings)
+        else:
+            encoder = None
         
         # because sub context length is not sorted
         # 18.08.03 to modify method
@@ -216,7 +221,7 @@ def make_base_model(model_opt, fields, gpu, checkpoint=None):
 
     # Make NMTModel(= encoder + decoder).
     if model_opt.model_type == "hierarchical_text":
-        model = HierarchicalModel(context_encoder, sent_encoder, decoder)
+        model = HierarchicalModel(context_encoder, sent_encoder, decoder, normal_encoder=encoder)
     else:
         model = NMTModel(encoder, decoder)
     model.model_type = model_opt.model_type
