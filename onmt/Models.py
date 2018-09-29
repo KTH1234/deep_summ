@@ -370,6 +370,7 @@ class RNNDecoderBase(nn.Module):
         self._coverage = coverage_attn
         #hierarchical model
         if model_type == "hierarchical_text":
+            self.cat_word_attn = nn.Linear(hidden_size*2, hidden_size, bias=False)
             self.attn = onmt.modules.HierarchicalAttention(
                 hidden_size, coverage=coverage_attn,
                 attn_type=attn_type,
@@ -380,6 +381,11 @@ class RNNDecoderBase(nn.Module):
                 attn_type=attn_type,
             )            
             print("model line:373 hierarchical attn")
+            
+            # add word info 
+            if hier_add_word_enc_input:
+                self.linear_out = nn.Linear(hidden_size*3, hidden_size, bias=False)
+                self.tanh = nn.Tanh()            
         else:
             self.attn = onmt.modules.GlobalAttention(
             hidden_size, coverage=coverage_attn,
@@ -797,7 +803,7 @@ class HierarchicalInputFeedRNNDecoder(RNNDecoderBase):
 #         print("model line 785 sentence_memory_lengths", sentence_memory_lengths)
 #         print("model line 785 context_memory_lengths", context_memory_lengths)
         #print("model line:794 normal_word_enc_input", normal_word_enc_input) # 1 * batch * hidden
-        #input("model line:795")
+
             
         # for intra-temporal attention, init attn history per every batches
 #         self.attn.init_attn_outputs()
@@ -830,19 +836,75 @@ class HierarchicalInputFeedRNNDecoder(RNNDecoderBase):
 #             print("model line:815 decoder rnn output", rnn_output) # batch * hidden
 
             #print("model line:832 decoder rnn output", rnn_output) # batch * hidden
-            word_attn_output, word_attn = self.word_attn(
-                rnn_output,
-                normal_word_enc_mb.transpose(0, 1),
-                normal_word_enc_mb_len,
-            )
-            #print("model line:838 decoder rnn word_attn_output", word_attn_output) # batch * hidden
-
+  
             decoder_output, context_attn = self.attn(
                 rnn_output,
                 context_memory_bank.transpose(0, 1),
                 context_memory_lengths.data,
-                normal_word_enc_input = word_attn_output.unsqueeze(1)
-            ) # for sharing decoder weight
+                only_context_vec = True
+            ) 
+#             print("model line:846 context mask", context_mask) # src_eln * batch
+#             print("model line:846 max, context mask", torch.max(context_mask)) #
+#             print("model line:846 context_attn", context_attn) # batch * context_len           
+            
+
+            def make_entire_context_mask(context_mask, context_attn):
+                hier_attn_mask = torch.zeros_like(context_mask).float() # batch * src_len
+                max_len = torch.max(context_mask).data
+                
+                for i in range(max_len[0]):
+                    #print("model line:846 context_mask >= i", (context_mask == i).float()) # 
+                    #print("model line:846 context_attn[:,i]", context_attn[:,i]) # 
+                    hier_attn_mask = hier_attn_mask + ((context_mask == i).float() * context_attn[:,i].unsqueeze(1))
+                return hier_attn_mask
+                
+                
+            # no hier attn mask
+            hier_attn_mask = None
+            # hier attn_mask
+            #hier_attn_mask = make_entire_context_mask(context_mask.t(), context_attn)
+#             print("model line:846 hier_attn_mask", hier_attn_mask) # batch * src_len
+#             print("model line:846 hier_attn_mask", torch.sum(hier_attn_mask, 1)) # 
+                
+            
+            
+            context_output = self.cat_word_attn(torch.cat([rnn_output, decoder_output],1))
+
+
+            word_attn_output, word_attn = self.word_attn(
+                context_output,
+                normal_word_enc_mb.transpose(0, 1),
+                normal_word_enc_mb_len,
+                hier_attn_mask = hier_attn_mask
+            )      
+#             input("model line:848")
+            
+            #print("model line:856 decoder_output", decoder_output.size()) # batch * hidden
+            #print("model line:857 word_attn_output", word_attn_output.size()) #  batch * hidden
+            
+            
+            concat_c = torch.cat([decoder_output, rnn_output, word_attn_output], 1)
+            decoder_output = self.tanh(self.linear_out(concat_c))
+            #print("model line:862 decoder_output", decoder_output.size()) # batch * hidden
+            #input("model line:863")
+             
+            
+            
+            #print("model line:854 state.hidden", state.hidden) # tuple (1* batch * hidden)
+            #print("model line:855 state.input_feed", state.input_feed) # tuple (1* batch * hidden)
+#             print("model line:842 decoder_output", decoder_output) # batch * hidden
+#             print("model line:856 rnn_output", rnn_output) # batch * hidden
+#             print("model line:857 context_output", context_output) # batch * hidden
+            #input("model line:856")
+            
+#             word_attn_output, word_attn = self.word_attn(
+#                 rnn_output,
+#                 normal_word_enc_mb.transpose(0, 1),
+#                 normal_word_enc_mb_len,
+#             )
+            #print("model line:838 decoder rnn word_attn_output", word_attn_output) # batch * hidden
+
+ # for sharing decoder weight
 #             print("model line 513 after attn")
 
         
@@ -1556,5 +1618,7 @@ class RNNDecoderState(DecoderState):
                 for e in self._all]
         self.hidden = tuple(vars[:-1])
         self.input_feed = vars[-1]
+
+        
 
         

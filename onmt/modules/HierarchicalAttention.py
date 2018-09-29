@@ -117,7 +117,7 @@ class HierarchicalAttention(nn.Module):
 
             return self.v(wquh.view(-1, dim)).view(tgt_batch, tgt_len, src_len)
 
-    def forward(self, input, memory_bank, memory_lengths=None, coverage=None, normal_word_enc_input=None):
+    def forward(self, input, memory_bank, memory_lengths=None, coverage=None, normal_word_enc_input=None, only_context_vec=False, hier_attn_mask=None):
         """
         Args:
           input (`FloatTensor`): query vectors `[batch x tgt_len x dim]`
@@ -160,6 +160,10 @@ class HierarchicalAttention(nn.Module):
 
         # compute attention scores, as in Luong et al.
         align = self.score(input, memory_bank)
+        
+#         print("hierattn line:164 align", align.size()) # batch * 1 * src_len
+        if hier_attn_mask is not None:
+            align = align * hier_attn_mask.unsqueeze(1)
 
         if memory_lengths is not None:
             mask = sequence_mask(memory_lengths)
@@ -173,21 +177,26 @@ class HierarchicalAttention(nn.Module):
         # each context vector c_t is the weighted average
         # over all the source hidden states
         c = torch.bmm(align_vectors, memory_bank)
+        
+        
 
-        # concatenate
-        if self.hier_add_word_enc_input is not None:
-            assert normal_word_enc_input is not None
-            #print("hier attn line:174 c", c) # batch * 1 * hidden
-            #print("hier attn line:175 input", input) # batch * 1 * hidden
-            #print("hier attn line:176 normal_word_enc_input", normal_word_enc_input) # batch * 1 * hidden
-            
-            concat_c = torch.cat([c, input, normal_word_enc_input], 2).view(batch*targetL, dim*3)
-            #input("hier attn line:179")
-        else:
-            concat_c = torch.cat([c, input], 2).view(batch*targetL, dim*2)
-        attn_h = self.linear_out(concat_c).view(batch, targetL, dim)
-        if self.attn_type in ["general", "dot"]:
-            attn_h = self.tanh(attn_h)
+        if only_context_vec:
+            attn_h = c
+        else:        
+            # concatenate
+            if self.hier_add_word_enc_input is not None:
+                assert normal_word_enc_input is not None
+                #print("hier attn line:174 c", c) # batch * 1 * hidden
+                #print("hier attn line:175 input", input) # batch * 1 * hidden
+                #print("hier attn line:176 normal_word_enc_input", normal_word_enc_input) # batch * 1 * hidden
+
+                concat_c = torch.cat([c, input, normal_word_enc_input], 2).view(batch*targetL, dim*3)
+                #input("hier attn line:179")
+            else:
+                concat_c = torch.cat([c, input], 2).view(batch*targetL, dim*2)
+            attn_h = self.linear_out(concat_c).view(batch, targetL, dim)
+            if self.attn_type in ["general", "dot"]:
+                attn_h = self.tanh(attn_h)
 
         if one_step:
             attn_h = attn_h.squeeze(1)
@@ -213,5 +222,6 @@ class HierarchicalAttention(nn.Module):
             aeq(targetL, targetL_)
             aeq(batch, batch_)
             aeq(sourceL, sourceL_)
+            
 
         return attn_h, align_vectors

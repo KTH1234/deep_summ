@@ -370,18 +370,32 @@ class Trainer(object):
                 tgt = tgt_outer[j: j + trunc_size]
                 
                 if self.model.obj_f == "ml":
+                    #print("tariner line:373 model opt", self.model.model_type)
                     # 2. F-prop all but generator.
                     if self.grad_accum_count == 1:
                         self.model.zero_grad()
-                    outputs, sent_attns, context_attns, dec_state = \
-                        self.model(src, tgt, src_lengths, dec_state, batch)
-#                     print("Trainer line:346 outputs", outputs.size())                        
-#                     print("Trainer line:347 tgt", tgt.size())   
-                    # 3. Compute loss in shards for memory efficiency.
-                    batch_stats = self.train_loss.sharded_compute_loss(
-                            batch, outputs, context_attns, j,
-                            trunc_size, self.shard_size, normalization)
-#                     input("trainer line:377")
+                        
+                    if self.model.model_type == "hierarchical_text":
+                        outputs, sent_attns, context_attns, dec_state = \
+                            self.model(src, tgt, src_lengths, dec_state, batch)
+    #                     print("Trainer line:346 outputs", outputs.size())                        
+    #                     print("Trainer line:347 tgt", tgt.size())   
+                        # 3. Compute loss in shards for memory efficiency.
+                        batch_stats = self.train_loss.sharded_compute_loss(
+                                batch, outputs, context_attns, j,
+                                trunc_size, self.shard_size, normalization)
+    #                     input("trainer line:377")
+
+                    else:
+                        outputs, attns, dec_state = \
+                            self.model(src, tgt, src_lengths, dec_state, batch)
+    #                     print("Trainer line:346 outputs", outputs.size())                        
+    #                     print("Trainer line:347 tgt", tgt.size())   
+                        # 3. Compute loss in shards for memory efficiency.
+                        batch_stats = self.train_loss.sharded_compute_loss(
+                                batch, outputs, attns, j,
+                                trunc_size, self.shard_size, normalization)
+
                     # 4. Update the parameters and statistics.
                     if self.grad_accum_count == 1:
                         self.optim.step()
